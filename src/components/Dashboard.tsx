@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Project } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { createProject, deleteProject, seedSampleData } from '../services/firestoreService';
-import { FolderKanban, Plus, Sparkles, Trash2, ArrowRight, Database } from 'lucide-react';
+import { createProject, deleteProject } from '../services/firestoreService';
+import { FolderKanban, Plus, Sparkles, Trash2, ArrowRight } from 'lucide-react';
 
 interface DashboardProps {
   projects: Project[];
@@ -15,7 +15,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, onSelectProject 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
-  const [seeding, setSeeding] = useState(false);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,22 +35,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, onSelectProject 
       alert('Chyba při zakládání projektu.');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleSeedDemo = async () => {
-    if (projects.length > 0 && !window.confirm('Vložit ukázková data dle zadání (Organizace školní akce + členové týmu + úkoly)?')) {
-      return;
-    }
-    setSeeding(true);
-    try {
-      await seedSampleData(userProfile?.uid || '', userProfile?.displayName || '');
-      alert('Ukázková data dle zadání byla úspěšně vygenerována!');
-    } catch (err) {
-      console.error(err);
-      alert('Chyba při nahrávání ukázkových dat. Zkontrolujte připojení k Firebase.');
-    } finally {
-      setSeeding(false);
     }
   };
 
@@ -90,16 +73,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, onSelectProject 
               <Plus className="w-4 h-4" />
               Založit nový projekt
             </button>
-
-            <button
-              onClick={handleSeedDemo}
-              disabled={seeding}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 text-white font-semibold text-sm backdrop-blur-md transition cursor-pointer border border-white/20 disabled:opacity-50"
-              title="Vloží vzorová data ze specifikace (Projekt Organizace školní akce, sekce Marketing, úkoly s podúkoly, řešitele)"
-            >
-              <Database className="w-4 h-4 text-amber-300" />
-              {seeding ? 'Nahrávám ukázku...' : 'Nahrát ukázková data dle zadání'}
-            </button>
           </div>
         </div>
       </div>
@@ -111,26 +84,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, onSelectProject 
           <p className="text-xs text-slate-500">Seznam všech dostupných týmových projektů</p>
         </div>
 
-        <div className="flex items-center gap-2">
-          {projects.length === 0 && (
-            <button
-              onClick={handleSeedDemo}
-              disabled={seeding}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-xl transition cursor-pointer disabled:opacity-50"
-            >
-              <Database className="w-3.5 h-3.5 text-amber-600" />
-              {seeding ? 'Generuji...' : 'Vložit ukázková data'}
-            </button>
-          )}
-
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow transition cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            Nový projekt
-          </button>
-        </div>
+        <button
+          onClick={() => setShowCreateModal(true)}
+          className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow transition cursor-pointer"
+        >
+          <Plus className="w-4 h-4" />
+          Nový projekt
+        </button>
       </div>
 
       {/* Grid */}
@@ -139,23 +99,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, onSelectProject 
           <FolderKanban className="w-12 h-12 text-slate-300 mx-auto mb-3" />
           <h3 className="text-base font-semibold text-slate-700">Zatím žádné projekty</h3>
           <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-            Začněte vytvořením prvního projektu nebo jedním kliknutím nahrajte ukázková data ze zadání.
+            Začněte vytvořením prvního projektu pro organizaci úkolů vašeho týmu.
           </p>
-          <div className="mt-5 flex flex-wrap justify-center gap-3">
-            <button
-              onClick={handleSeedDemo}
-              disabled={seeding}
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-medium rounded-xl text-xs transition cursor-pointer disabled:opacity-50 shadow-sm"
-            >
-              <Database className="w-4 h-4" />
-              {seeding ? 'Generuji...' : 'Nahrát ukázková data ze zadání'}
-            </button>
+          <div className="mt-5 flex justify-center">
             <button
               onClick={() => setShowCreateModal(true)}
               className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl text-xs transition cursor-pointer shadow-sm"
             >
               <Plus className="w-4 h-4" />
-              Vytvořit prázdný projekt
+              Vytvořit projekt
             </button>
           </div>
         </div>
@@ -218,7 +170,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, onSelectProject 
                   type="text"
                   required
                   autoFocus
-                  placeholder="např. Organizace školní akce"
+                  placeholder="např. Ročníkový projekt"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full text-sm px-3.5 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
