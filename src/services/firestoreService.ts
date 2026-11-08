@@ -10,8 +10,7 @@ import {
   where, 
   orderBy,
   arrayUnion,
-  arrayRemove,
-  getDocs
+  arrayRemove
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Project, Section, Task } from '../types';
@@ -39,7 +38,7 @@ export const createProject = async (data: Omit<Project, 'id' | 'createdAt'>) => 
   // Create a default section
   await addDoc(collection(db, 'sections'), {
     projectId: docRef.id,
-    name: 'Všeobecné',
+    name: 'Obecné',
     order: 0
   });
 
@@ -134,38 +133,35 @@ export const deleteTask = async (taskId: string) => {
 };
 
 /**
- * Seeds a full demo project exactly matching the assignment specification
- * (Organizace školní akce -> Marketing, Organizace, Program -> Tasks -> Subtasks)
+ * Creates clean, professional sample projects with neutral member accounts
  */
 export const seedSampleData = async (currentUserId: string, currentUserName: string) => {
-  // 1. Ensure mock demo users exist in the 'users' collection so they can be assigned
+  // Neutral team members
   const demoUsers = [
-    { uid: 'demo_adam', email: 'adam@skola.cz', displayName: 'Adam Novák' },
-    { uid: 'demo_bara', email: 'bara@skola.cz', displayName: 'Bára Dvořáková' },
-    { uid: 'demo_cyril', email: 'cyril@skola.cz', displayName: 'Cyril Černý' },
+    { uid: 'user_alex', email: 'alex@team.io', displayName: 'Alex' },
+    { uid: 'user_sam', email: 'sam@team.io', displayName: 'Sam' },
+    { uid: 'user_taylor', email: 'taylor@team.io', displayName: 'Taylor' },
   ];
 
   for (const u of demoUsers) {
     await setDoc(doc(db, 'users', u.uid), u, { merge: true });
   }
 
-  // Also ensure current user is registered in users list
   if (currentUserId) {
     await setDoc(doc(db, 'users', currentUserId), {
       uid: currentUserId,
-      email: `${currentUserId.slice(0, 5)}@user.cz`,
-      displayName: currentUserName || 'Já (Uživatel)'
+      email: `${currentUserId.slice(0, 5)}@team.io`,
+      displayName: currentUserName || 'Vy'
     }, { merge: true });
   }
 
-  const allMembers = [currentUserId, 'demo_adam', 'demo_bara', 'demo_cyril'].filter(Boolean);
+  const allMembers = [currentUserId, 'user_alex', 'user_sam', 'user_taylor'].filter(Boolean);
 
-  // Helper date calculation relative to today
   const today = new Date();
   const formatYMD = (d: Date) => d.toISOString().split('T')[0];
 
   const pastDate = new Date(today);
-  pastDate.setDate(today.getDate() - 3);
+  pastDate.setDate(today.getDate() - 2);
 
   const todayDate = new Date(today);
 
@@ -173,164 +169,144 @@ export const seedSampleData = async (currentUserId: string, currentUserName: str
   nearDate.setDate(today.getDate() + 2);
 
   const futureDate = new Date(today);
-  futureDate.setDate(today.getDate() + 10);
+  futureDate.setDate(today.getDate() + 7);
 
-  // 2. Create Project 1: "Organizace školní akce" (exact assignment example)
-  const projRef1 = await addDoc(collection(db, 'projects'), {
-    name: 'Organizace školní akce',
-    description: 'Příprava maturitního plesu a studentského dne. Ukázkový projekt dle zadání specifikace SIN.',
-    ownerId: currentUserId || 'demo_adam',
+  // Projekt 1: Redesign webové platformy
+  const proj1 = await addDoc(collection(db, 'projects'), {
+    name: 'Redesign webové platformy',
+    description: 'Kompletní modernizace rozhraní, sjednocení komponent a optimalizace výkonu.',
+    ownerId: currentUserId || 'user_alex',
     members: allMembers,
     createdAt: new Date().toISOString()
   });
 
-  // Sections for Project 1
-  const secMarketing = await addDoc(collection(db, 'sections'), {
-    projectId: projRef1.id,
-    name: 'Marketing',
+  const secDesign = await addDoc(collection(db, 'sections'), {
+    projectId: proj1.id,
+    name: 'Design & UX',
     order: 0
   });
 
-  const secOrganizace = await addDoc(collection(db, 'sections'), {
-    projectId: projRef1.id,
-    name: 'Organizace & Logistika',
+  const secFrontend = await addDoc(collection(db, 'sections'), {
+    projectId: proj1.id,
+    name: 'Frontend',
     order: 1
   });
 
-  const secProgram = await addDoc(collection(db, 'sections'), {
-    projectId: projRef1.id,
-    name: 'Program & Hudba',
+  const secTesting = await addDoc(collection(db, 'sections'), {
+    projectId: proj1.id,
+    name: 'Testování',
     order: 2
   });
 
-  // Tasks for Project 1
-  // Exact task from assignment: Připravit plakát (Marketing)
+  // Úkoly k projektu 1
   await createTask({
-    projectId: projRef1.id,
-    sectionId: secMarketing.id,
-    title: 'Připravit plakát',
-    description: 'Vytvořit oficiální grafický vizuál pro tisk a sociální sítě dle zadání.',
-    status: 'in_progress',
-    priority: 'high',
-    deadline: formatYMD(todayDate),
-    assigneeId: 'demo_bara',
-    order: 0,
-    subtasks: [
-      { id: 'sub_1', title: 'Vytvořit grafiku', completed: true },
-      { id: 'sub_2', title: 'Schválit návrh s vedením', completed: false },
-      { id: 'sub_3', title: 'Zadat do tisku', completed: false }
-    ]
-  });
-
-  // Exact task from assignment: Zajistit prostory (Organizace)
-  await createTask({
-    projectId: projRef1.id,
-    sectionId: secOrganizace.id,
-    title: 'Zajistit prostory',
-    description: 'Rezervace hlavního sálu a podpis nájemní smlouvy.',
+    projectId: proj1.id,
+    sectionId: secDesign.id,
+    title: 'Příprava design systému',
+    description: 'Definice barevné palety, typografie a stavů komponent.',
     status: 'done',
     priority: 'high',
     deadline: formatYMD(pastDate),
-    assigneeId: currentUserId || 'demo_adam',
+    assigneeId: 'user_taylor',
     order: 0,
     subtasks: [
-      { id: 'sub_4', title: 'Prohlídka sálu', completed: true },
-      { id: 'sub_5', title: 'Podpis smlouvy a zaplacení zálohy', completed: true }
+      { id: 'st_1', title: 'Export barevné palety', completed: true },
+      { id: 'st_2', title: 'Příprava typografie a tlačítek', completed: true }
     ]
   });
 
-  // Task: Propagace na sociálních sítích (Marketing, To Do, overdue demo)
   await createTask({
-    projectId: projRef1.id,
-    sectionId: secMarketing.id,
-    title: 'Spustit kampaň na Instagramu',
-    description: 'Publikovat příspěvky a spustit anketu pro studenty.',
-    status: 'todo',
-    priority: 'medium',
-    deadline: formatYMD(pastDate), // Shows overdue in Timeline & Kanban
-    assigneeId: 'demo_cyril',
-    order: 0,
-    subtasks: [
-      { id: 'sub_6', title: 'Napsat texty k příspěvkům', completed: false },
-      { id: 'sub_7', title: 'Naplánovat termíny zveřejnění', completed: false }
-    ]
-  });
-
-  // Task: Domluvit kapelu a moderátora (Program, In Progress)
-  await createTask({
-    projectId: projRef1.id,
-    sectionId: secProgram.id,
-    title: 'Domluvit kapelu a moderátora',
-    description: 'Kontaktovat studentskou kapelu a domluvit harmonogram vystoupení.',
+    projectId: proj1.id,
+    sectionId: secFrontend.id,
+    title: 'Implementace responzivního layoutu',
+    description: 'Mobilní a desktopové zobrazení hlavní navigace a panelů.',
     status: 'in_progress',
     priority: 'high',
-    deadline: formatYMD(nearDate),
-    assigneeId: 'demo_adam',
-    order: 1,
+    deadline: formatYMD(todayDate),
+    assigneeId: 'user_alex',
+    order: 0,
     subtasks: [
-      { id: 'sub_8', title: 'Oslovit kapelu', completed: true },
-      { id: 'sub_9', title: 'Poptat moderátora akce', completed: false }
+      { id: 'st_3', title: 'Desktop verze', completed: true },
+      { id: 'st_4', title: 'Mobilní verze a menu', completed: false }
     ]
   });
 
-  // Task: Zabezpečení občerstvení (Organizace, To Do)
   await createTask({
-    projectId: projRef1.id,
-    sectionId: secOrganizace.id,
-    title: 'Zajistit catering a nápoje',
-    description: 'Oslovit dodavatele občerstvení a dohodnout menu pro návštěvníky.',
+    projectId: proj1.id,
+    sectionId: secFrontend.id,
+    title: 'Integrace databáze a ukládání stavů',
+    description: 'Propojení formulářů se synchronizací v reálném čase.',
+    status: 'todo',
+    priority: 'medium',
+    deadline: formatYMD(nearDate),
+    assigneeId: currentUserId || 'user_sam',
+    order: 1,
+    subtasks: [
+      { id: 'st_5', title: 'Návrh schématu', completed: true },
+      { id: 'st_6', title: 'Napojení query', completed: false }
+    ]
+  });
+
+  await createTask({
+    projectId: proj1.id,
+    sectionId: secTesting.id,
+    title: 'Uživatelské testování a feedback',
+    description: 'Testování použitelnosti s první skupinou uživatelů.',
     status: 'todo',
     priority: 'low',
     deadline: formatYMD(futureDate),
-    assigneeId: currentUserId || 'demo_bara',
-    order: 1,
+    assigneeId: 'user_sam',
+    order: 0,
     subtasks: []
   });
 
-  // 3. Create Project 2: "Vývoj mobilní aplikace" (další ukázkový projekt pro předvedení)
-  const projRef2 = await addDoc(collection(db, 'projects'), {
-    name: 'Vývoj webového portálu',
-    description: 'Týmový semestrální projekt – návrh rozhraní, backend architektura a testování.',
-    ownerId: currentUserId || 'demo_adam',
+  // Projekt 2: Produktová kampaň Q4
+  const proj2 = await addDoc(collection(db, 'projects'), {
+    name: 'Produktová kampaň Q4',
+    description: 'Příprava marketingových podkladů, newsletteru a vizuálů pro podzimní uvedení.',
+    ownerId: currentUserId || 'user_taylor',
     members: allMembers,
     createdAt: new Date(Date.now() - 3600000).toISOString()
   });
 
-  const secUi = await addDoc(collection(db, 'sections'), {
-    projectId: projRef2.id,
-    name: 'UI / UX Design',
+  const secObsah = await addDoc(collection(db, 'sections'), {
+    projectId: proj2.id,
+    name: 'Obsah & Texty',
     order: 0
   });
 
-  const secDev = await addDoc(collection(db, 'sections'), {
-    projectId: projRef2.id,
-    name: 'Frontend & Backend',
+  const secVizuály = await addDoc(collection(db, 'sections'), {
+    projectId: proj2.id,
+    name: 'Grafika & Média',
     order: 1
   });
 
   await createTask({
-    projectId: projRef2.id,
-    sectionId: secUi.id,
-    title: 'Vytvořit wireframy v Figmě',
-    description: 'Návrh komponent a wireframů všech hlavních obrazovek.',
-    status: 'done',
+    projectId: proj2.id,
+    sectionId: secObsah.id,
+    title: 'Článek pro blog a sociální sítě',
+    description: 'Představení klíčových novinek a funkcí pro uživatele.',
+    status: 'in_progress',
     priority: 'medium',
-    deadline: formatYMD(pastDate),
-    assigneeId: 'demo_bara',
+    deadline: formatYMD(todayDate),
+    assigneeId: 'user_sam',
     order: 0,
-    subtasks: [{ id: 'sub_w1', title: 'Dashboard', completed: true }, { id: 'sub_w2', title: 'Detail projektu', completed: true }]
+    subtasks: [
+      { id: 'st_7', title: 'Návrh osnovy', completed: true },
+      { id: 'st_8', title: 'Finální korektura', completed: false }
+    ]
   });
 
   await createTask({
-    projectId: projRef2.id,
-    sectionId: secDev.id,
-    title: 'Implementace Kanban boardu s Drag & Drop',
-    description: 'Otestovat knihovnu na přesouvání karet mezi sloupci.',
-    status: 'in_progress',
+    projectId: proj2.id,
+    sectionId: secVizuály.id,
+    title: 'Sada promo bannerů',
+    description: 'Vizuály pro kampaň ve standardních formátech.',
+    status: 'todo',
     priority: 'high',
-    deadline: formatYMD(todayDate),
-    assigneeId: currentUserId || 'demo_cyril',
+    deadline: formatYMD(pastDate), // Overdue v Timeline
+    assigneeId: 'user_alex',
     order: 0,
-    subtasks: [{ id: 'sub_d1', title: 'Testování dnd', completed: true }]
+    subtasks: []
   });
 };
