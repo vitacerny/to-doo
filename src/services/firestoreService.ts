@@ -8,7 +8,8 @@ import {
   query, 
   where, 
   orderBy,
-  serverTimestamp
+  arrayUnion,
+  arrayRemove
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Project, Section, Task } from '../types';
@@ -45,6 +46,20 @@ export const createProject = async (data: Omit<Project, 'id' | 'createdAt'>) => 
 
 export const deleteProject = async (projectId: string) => {
   await deleteDoc(doc(db, 'projects', projectId));
+};
+
+export const addProjectMember = async (projectId: string, userUid: string) => {
+  const projectRef = doc(db, 'projects', projectId);
+  await updateDoc(projectRef, {
+    members: arrayUnion(userUid)
+  });
+};
+
+export const removeProjectMember = async (projectId: string, userUid: string) => {
+  const projectRef = doc(db, 'projects', projectId);
+  await updateDoc(projectRef, {
+    members: arrayRemove(userUid)
+  });
 };
 
 // SECTIONS

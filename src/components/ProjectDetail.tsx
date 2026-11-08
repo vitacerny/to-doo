@@ -3,6 +3,7 @@ import { Project, Section, Task } from '../types';
 import { KanbanBoard } from './KanbanBoard';
 import { Timeline } from './Timeline';
 import { SectionManager } from './SectionManager';
+import { MemberManager } from './MemberManager';
 import { TaskModal } from './TaskModal';
 import { 
   ArrowLeft, 
@@ -11,7 +12,6 @@ import {
   Layers, 
   Plus, 
   CheckCircle, 
-  Clock, 
   Users
 } from 'lucide-react';
 import { createTask } from '../services/firestoreService';
@@ -31,8 +31,8 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'kanban' | 'timeline'>('kanban');
   const [showSectionManager, setShowSectionManager] = useState(false);
+  const [showMemberManager, setShowMemberManager] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [showNewTaskModal, setShowNewTaskModal] = useState(false);
 
   // Stats
   const totalTasks = tasks.length;
@@ -78,23 +78,33 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
             className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-800 transition py-1 px-2.5 rounded-lg hover:bg-slate-200/60 cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
-            Zpět na přehled projektů
+            Zpět na projekty
           </button>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-              {project.name}
-            </h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+                {project.name}
+              </h1>
+            </div>
             {project.description && (
-              <p className="text-sm text-slate-500 mt-0.5">
+              <p className="text-sm text-slate-500 mt-1 max-w-2xl">
                 {project.description}
               </p>
             )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              onClick={() => setShowMemberManager(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 hover:border-slate-300 shadow-sm transition cursor-pointer"
+            >
+              <Users className="w-4 h-4 text-indigo-600" />
+              Členové ({project.members?.length || 1})
+            </button>
+
             <button
               onClick={() => setShowSectionManager(true)}
               className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 hover:border-slate-300 shadow-sm transition cursor-pointer"
@@ -180,6 +190,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
       {selectedTask && (
         <TaskModal
           task={selectedTask}
+          projectMembers={project.members}
           sections={sections}
           onClose={() => setSelectedTask(null)}
         />
@@ -190,6 +201,13 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
           projectId={project.id}
           sections={sections}
           onClose={() => setShowSectionManager(false)}
+        />
+      )}
+
+      {showMemberManager && (
+        <MemberManager
+          project={project}
+          onClose={() => setShowMemberManager(false)}
         />
       )}
     </div>

@@ -17,11 +17,17 @@ import {
 
 interface TaskModalProps {
   task: Task | null;
+  projectMembers?: string[];
   sections: Section[];
   onClose: () => void;
 }
 
-export const TaskModal: React.FC<TaskModalProps> = ({ task, sections, onClose }) => {
+export const TaskModal: React.FC<TaskModalProps> = ({ 
+  task, 
+  projectMembers,
+  sections, 
+  onClose 
+}) => {
   const { usersList } = useAuth();
   
   if (!task) return null;
@@ -36,6 +42,11 @@ export const TaskModal: React.FC<TaskModalProps> = ({ task, sections, onClose })
   const [subtasks, setSubtasks] = useState<Subtask[]>(task.subtasks || []);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [saving, setSaving] = useState(false);
+
+  // Filter assignees to project members if configured, or all users
+  const assignableUsers = projectMembers && projectMembers.length > 0
+    ? usersList.filter(u => projectMembers.includes(u.uid))
+    : usersList;
 
   const handleSave = async () => {
     if (!title.trim()) return;
@@ -98,16 +109,15 @@ export const TaskModal: React.FC<TaskModalProps> = ({ task, sections, onClose })
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
           <div className="flex items-center gap-2 text-xs font-medium text-slate-500 uppercase tracking-wider">
-            <Tag className="w-4 h-4 text-slate-400" />
-            Detail úkolu
+            <span>Detail úkolu</span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
             <button
               onClick={handleDelete}
+              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
               title="Smazat úkol"
-              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition cursor-pointer"
             >
-              <Trash2 className="w-5 h-5" />
+              <Trash2 className="w-4 h-4" />
             </button>
             <button
               onClick={onClose}
@@ -118,29 +128,30 @@ export const TaskModal: React.FC<TaskModalProps> = ({ task, sections, onClose })
           </div>
         </div>
 
-        {/* Content Body */}
+        {/* Modal Body */}
         <div className="p-6 overflow-y-auto space-y-6 flex-1">
           {/* Title */}
           <div>
             <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">
-              Název úkolu
+              Název úkolu *
             </label>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="w-full text-lg font-semibold px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="Např. Připravit plakát"
+              placeholder="Např. Připravit podklady..."
+              className="w-full text-lg font-bold px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-800"
+              required
             />
           </div>
 
-          {/* Grid attributes */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
+          {/* Grid fields: Status, Priority, Section, Assignee */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Status */}
             <div>
               <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 mb-1.5">
-                <CheckSquare className="w-3.5 h-3.5" />
-                Stav
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Stav úkolu
               </label>
               <select
                 value={status}
@@ -201,7 +212,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({ task, sections, onClose })
                 className="w-full text-sm bg-white px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="">Nepřiřazeno</option>
-                {usersList.map((u) => (
+                {assignableUsers.map((u) => (
                   <option key={u.uid} value={u.uid}>
                     {u.displayName || u.email}
                   </option>
@@ -251,47 +262,46 @@ export const TaskModal: React.FC<TaskModalProps> = ({ task, sections, onClose })
               {subtasks.map((st) => (
                 <div
                   key={st.id}
-                  className="flex items-center justify-between p-2 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-100 transition group"
+                  className="flex items-center justify-between p-2 rounded-lg bg-slate-50 hover:bg-slate-100/70 border border-slate-200/60 transition group"
                 >
-                  <button
-                    type="button"
+                  <div
                     onClick={() => handleToggleSubtask(st.id)}
-                    className="flex items-center gap-2.5 text-sm text-left flex-1 cursor-pointer"
+                    className="flex items-center gap-2.5 cursor-pointer flex-1"
                   >
                     {st.completed ? (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
                     ) : (
-                      <Circle className="w-4 h-4 text-slate-400 shrink-0" />
+                      <Circle className="w-4 h-4 text-slate-300 flex-shrink-0" />
                     )}
-                    <span className={st.completed ? 'line-through text-slate-400' : 'text-slate-700'}>
+                    <span className={`text-sm ${st.completed ? 'line-through text-slate-400' : 'text-slate-700'}`}>
                       {st.title}
                     </span>
-                  </button>
+                  </div>
                   <button
-                    type="button"
                     onClick={() => handleDeleteSubtask(st.id)}
-                    className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 p-1 cursor-pointer transition"
+                    className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer transition"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ))}
             </div>
 
-            {/* Add subtask form */}
+            {/* Add subtask */}
             <form onSubmit={handleAddSubtask} className="flex gap-2">
               <input
                 type="text"
                 placeholder="Přidat podúkol..."
                 value={newSubtaskTitle}
                 onChange={(e) => setNewSubtaskTitle(e.target.value)}
-                className="flex-1 text-sm px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="flex-1 text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
               <button
                 type="submit"
-                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium flex items-center gap-1 cursor-pointer"
+                disabled={!newSubtaskTitle.trim()}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-50"
               >
-                <Plus className="w-4 h-4" />
+                <Plus className="w-3.5 h-3.5" />
                 Přidat
               </button>
             </form>
@@ -299,22 +309,21 @@ export const TaskModal: React.FC<TaskModalProps> = ({ task, sections, onClose })
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-3 border-t border-slate-100 bg-slate-50">
+        <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-slate-100 bg-slate-50/50">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 font-medium rounded-lg cursor-pointer"
+            className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200/70 rounded-xl transition cursor-pointer"
           >
             Zrušit
           </button>
           <button
             onClick={handleSave}
             disabled={saving || !title.trim()}
-            className="px-5 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-sm transition disabled:opacity-50 cursor-pointer"
+            className="px-5 py-2 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-sm transition cursor-pointer disabled:opacity-50"
           >
             {saving ? 'Ukládám...' : 'Uložit změny'}
           </button>
         </div>
-
       </div>
     </div>
   );
