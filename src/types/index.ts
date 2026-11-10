@@ -45,3 +45,17 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
 }
+
+export type GiftStatus = 'idea' | 'to_buy' | 'bought' | 'wrapped';
+
+export interface ChristmasGift {
+  id: string;
+  userId: string;
+  recipient: string;        // Komu (např. Máma, Petr, Babička)
+  title: string;            // Co za dárek (např. Knížka, Svetr)
+  price?: number;           // Orientační / reálná cena v Kč
+  status: GiftStatus;       // Nápad, Koupit, Koupeno, Zabaleno
+  link?: string;            // Odkaz na e-shop
+  notes?: string;           // Poznámka / velikost / barva
+  createdAt: string;
+}

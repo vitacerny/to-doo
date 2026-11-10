@@ -12,7 +12,7 @@ import {
   arrayRemove
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Project, Section, Task } from '../types';
+import { Project, Section, Task, ChristmasGift } from '../types';
 
 // PROJECTS
 export const subscribeProjects = (callback: (projects: Project[]) => void) => {
@@ -129,4 +129,39 @@ export const updateTask = async (taskId: string, data: Partial<Task>) => {
 
 export const deleteTask = async (taskId: string) => {
   await deleteDoc(doc(db, 'tasks', taskId));
+};
+
+// CHRISTMAS GIFTS
+export const subscribeChristmasGifts = (userId: string, callback: (gifts: ChristmasGift[]) => void) => {
+  const q = query(
+    collection(db, 'christmas_gifts'),
+    where('userId', '==', userId)
+  );
+  return onSnapshot(q, (snapshot) => {
+    const gifts: ChristmasGift[] = [];
+    snapshot.forEach((doc) => {
+      gifts.push({ id: doc.id, ...doc.data() } as ChristmasGift);
+    });
+    gifts.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    callback(gifts);
+  }, (err) => {
+    console.error("subscribeChristmasGifts error:", err);
+  });
+};
+
+export const createChristmasGift = async (gift: Omit<ChristmasGift, 'id' | 'createdAt'>) => {
+  const now = new Date().toISOString();
+  return await addDoc(collection(db, 'christmas_gifts'), {
+    ...gift,
+    createdAt: now
+  });
+};
+
+export const updateChristmasGift = async (giftId: string, data: Partial<ChristmasGift>) => {
+  const giftRef = doc(db, 'christmas_gifts', giftId);
+  await updateDoc(giftRef, data);
+};
+
+export const deleteChristmasGift = async (giftId: string) => {
+  await deleteDoc(doc(db, 'christmas_gifts', giftId));
 };
