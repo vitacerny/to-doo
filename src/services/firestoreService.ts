@@ -151,15 +151,40 @@ export const subscribeChristmasGifts = (userId: string, callback: (gifts: Christ
 
 export const createChristmasGift = async (gift: Omit<ChristmasGift, 'id' | 'createdAt'>) => {
   const now = new Date().toISOString();
-  return await addDoc(collection(db, 'christmas_gifts'), {
-    ...gift,
+  // Firestore throws an error if any field is undefined. Sanitize object.
+  const payload: Record<string, any> = {
+    userId: gift.userId,
+    recipient: gift.recipient,
+    title: gift.title,
+    status: gift.status,
     createdAt: now
-  });
+  };
+
+  if (gift.price !== undefined && gift.price !== null && !isNaN(gift.price)) {
+    payload.price = gift.price;
+  }
+  if (gift.link !== undefined && gift.link !== null && gift.link.trim() !== '') {
+    payload.link = gift.link.trim();
+  }
+  if (gift.notes !== undefined && gift.notes !== null && gift.notes.trim() !== '') {
+    payload.notes = gift.notes.trim();
+  }
+
+  return await addDoc(collection(db, 'christmas_gifts'), payload);
 };
 
 export const updateChristmasGift = async (giftId: string, data: Partial<ChristmasGift>) => {
   const giftRef = doc(db, 'christmas_gifts', giftId);
-  await updateDoc(giftRef, data);
+  // Sanitize fields so undefined is never passed to Firestore updateDoc
+  const payload: Record<string, any> = {};
+
+  for (const [key, value] of Object.entries(data)) {
+    if (value !== undefined) {
+      payload[key] = value;
+    }
+  }
+
+  await updateDoc(giftRef, payload);
 };
 
 export const deleteChristmasGift = async (giftId: string) => {

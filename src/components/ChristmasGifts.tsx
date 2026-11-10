@@ -146,26 +146,26 @@ export const ChristmasGifts: React.FC<ChristmasGiftsProps> = ({ gifts }) => {
         await updateChristmasGift(editingGift.id, {
           recipient: recipient.trim(),
           title: title.trim(),
-          price: isNaN(parsedPrice as number) ? undefined : parsedPrice,
+          price: (parsedPrice !== undefined && !isNaN(parsedPrice)) ? parsedPrice : undefined,
           status,
-          link: link.trim() || undefined,
-          notes: notes.trim() || undefined
+          link: link.trim() || '',
+          notes: notes.trim() || ''
         });
       } else {
         await createChristmasGift({
           userId: currentUser.uid,
           recipient: recipient.trim(),
           title: title.trim(),
-          price: isNaN(parsedPrice as number) ? undefined : parsedPrice,
+          price: (parsedPrice !== undefined && !isNaN(parsedPrice)) ? parsedPrice : undefined,
           status,
           link: link.trim() || undefined,
           notes: notes.trim() || undefined
         });
       }
       setIsModalOpen(false);
-    } catch (err) {
-      console.error(err);
-      alert('Chyba při ukládání dárku.');
+    } catch (err: any) {
+      console.error("Chyba při ukládání vánočního dárku:", err);
+      alert('Chyba při ukládání dárku: ' + (err?.message || 'Neznámá chyba'));
     } finally {
       setSaving(false);
     }
@@ -539,8 +539,8 @@ export const ChristmasGifts: React.FC<ChristmasGiftsProps> = ({ gifts }) => {
                   Odkaz na e-shop (volitelné)
                 </label>
                 <input
-                  type="url"
-                  placeholder="https://..."
+                  type="text"
+                  placeholder="https://... nebo domena.cz"
                   value={link}
                   onChange={(e) => setLink(e.target.value)}
                   className="w-full text-sm px-3.5 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500"
