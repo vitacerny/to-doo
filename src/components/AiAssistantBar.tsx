@@ -40,27 +40,34 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ onEventCreated }
       const apiKey = getGeminiApiKey();
       const parsed: ParsedEventResult = await parseEventWithGemini(prompt.trim(), apiKey);
 
-      // Uložíme do kalendáře
-      await createCalendarEvent({
-        userId: currentUser.uid,
-        title: parsed.title,
-        description: parsed.description,
-        date: parsed.date,
-        startTime: parsed.startTime,
-        endTime: parsed.endTime,
-        category: parsed.category,
-        color: parsed.color,
-        isDone: false
-      });
+      const targetDates = parsed.dates && parsed.dates.length > 0 ? parsed.dates : [parsed.date];
+      const seriesId = targetDates.length > 1 ? 'series_' + Date.now() : undefined;
+
+      // Uložíme všechny výskyty (pokud jde o opakování, vytvoří celou sérii)
+      for (const d of targetDates) {
+        await createCalendarEvent({
+          userId: currentUser.uid,
+          title: parsed.title,
+          description: parsed.description,
+          date: d,
+          startTime: parsed.startTime,
+          endTime: parsed.endTime,
+          category: parsed.category,
+          color: parsed.color,
+          tutoring: parsed.tutoring,
+          recurringSeriesId: seriesId,
+          isDone: false
+        });
+      }
 
       // Zobrazíme hezkou zprávu
       setSuccessMessage(
-        parsed.aiReply || `Naplánováno: ${parsed.title} (${parsed.date}${parsed.startTime ? ` v ${parsed.startTime}` : ''})`
+        parsed.aiReply || `Naplánováno: ${parsed.title} (${targetDates.length > 1 ? `${targetDates.length} týdnů` : parsed.date}${parsed.startTime ? ` v ${parsed.startTime}` : ''})`
       );
       setPrompt('');
 
       if (onEventCreated) {
-        onEventCreated(parsed.date);
+        onEventCreated(targetDates[0]);
       }
 
       setTimeout(() => {

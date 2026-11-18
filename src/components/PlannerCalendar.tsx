@@ -97,6 +97,10 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const [subject, setSubject] = useState('M');
   const [customSubject, setCustomSubject] = useState('');
 
+  // Recurrence in manual modal
+  const [isRecurringModal, setIsRecurringModal] = useState(false);
+  const [recurrenceWeeks, setRecurrenceWeeks] = useState(8);
+
   // Handle tutoring place validation: soukromé doučování nemůže být v kanclu
   const handleTypeChange = (newType: TutoringType) => {
     setTutoringType(newType);
@@ -145,6 +149,8 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     setTutoringPlace('library');
     setSubject('M');
     setCustomSubject('');
+    setIsRecurringModal(false);
+    setRecurrenceWeeks(8);
     setIsModalOpen(true);
   };
 
@@ -212,18 +218,39 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           tutoring: tutoringPayload
         });
       } else {
-        await createCalendarEvent({
-          userId: currentUser.uid,
-          title: title.trim(),
-          description: description.trim(),
-          date: eventDate,
-          startTime: startTime || undefined,
-          endTime: endTime || undefined,
-          color,
-          category,
-          tutoring: tutoringPayload,
-          isDone: false
-        });
+        if (isRecurringModal && recurrenceWeeks > 1) {
+          const seriesId = 'series_' + Date.now();
+          const baseD = new Date(eventDate);
+          for (let i = 0; i < recurrenceWeeks; i++) {
+            const nextD = format(addWeeks(baseD, i), 'yyyy-MM-dd');
+            await createCalendarEvent({
+              userId: currentUser.uid,
+              title: title.trim(),
+              description: description.trim(),
+              date: nextD,
+              startTime: startTime || undefined,
+              endTime: endTime || undefined,
+              color,
+              category,
+              tutoring: tutoringPayload,
+              recurringSeriesId: seriesId,
+              isDone: false
+            });
+          }
+        } else {
+          await createCalendarEvent({
+            userId: currentUser.uid,
+            title: title.trim(),
+            description: description.trim(),
+            date: eventDate,
+            startTime: startTime || undefined,
+            endTime: endTime || undefined,
+            color,
+            category,
+            tutoring: tutoringPayload,
+            isDone: false
+          });
+        }
       }
       setIsModalOpen(false);
     } catch (err) {
@@ -1030,10 +1057,10 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                 />
               </div>
 
-              {/* Date */}
+              {/* Date & Recurrence */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Datum *
+                  Datum {isRecurringModal ? 'první lekce' : ''} *
                 </label>
                 <input
                   type="date"
@@ -1043,6 +1070,39 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                   className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 text-sm font-medium"
                 />
               </div>
+
+              {!editingEvent && (
+                <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isRecurringModal}
+                      onChange={(e) => setIsRecurringModal(e.target.checked)}
+                      className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
+                    />
+                    <span className="text-xs font-bold text-slate-800">
+                      Opakovat pravidelně každý týden
+                    </span>
+                  </label>
+
+                  {isRecurringModal && (
+                    <div className="flex items-center gap-2 pt-1 pl-6">
+                      <span className="text-xs text-slate-600 font-medium">Počet týdnů:</span>
+                      <select
+                        value={recurrenceWeeks}
+                        onChange={(e) => setRecurrenceWeeks(parseInt(e.target.value, 10))}
+                        className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                      >
+                        <option value={4}>4 týdny (1 měsíc)</option>
+                        <option value={8}>8 týdnů (2 měsíce)</option>
+                        <option value={12}>12 týdnů (3 měsíce / čtvrtletí)</option>
+                        <option value={16}>16 týdnů (pololetí)</option>
+                        <option value={20}>20 týdnů</option>
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Times */}
               <div className="grid grid-cols-2 gap-3">

@@ -83,6 +83,7 @@ export interface CalendarEvent {
   color: string; // 'blue' | 'indigo' | 'purple' | 'emerald' | 'amber' | 'rose'
   category: EventCategory;
   tutoring?: TutoringDetails;
+  recurringSeriesId?: string; // ID série opakování
   isDone?: boolean;
   createdAt: string;
 }

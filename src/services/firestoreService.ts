@@ -378,6 +378,7 @@ export const createCalendarEvent = async (event: Omit<CalendarEvent, 'id' | 'cre
     color: event.color || 'blue',
     category: event.category || 'event',
     tutoring: event.tutoring,
+    recurringSeriesId: event.recurringSeriesId,
     isDone: event.isDone || false,
     createdAt: now
   };
@@ -403,6 +404,7 @@ export const createCalendarEvent = async (event: Omit<CalendarEvent, 'id' | 'cre
     if (event.startTime) payload.startTime = event.startTime;
     if (event.endTime) payload.endTime = event.endTime;
     if (event.tutoring) payload.tutoring = event.tutoring;
+    if (event.recurringSeriesId) payload.recurringSeriesId = event.recurringSeriesId;
 
     await addDoc(collection(db, 'calendar_events'), payload);
   } catch (err) {
