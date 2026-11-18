@@ -60,7 +60,17 @@ export interface ChristmasGift {
   createdAt: string;
 }
 
-export type EventCategory = 'event' | 'task' | 'meeting' | 'reminder' | 'personal';
+export type EventCategory = 'event' | 'task' | 'meeting' | 'tutoring' | 'reminder' | 'personal';
+
+export type TutoringType = 'private' | 'company'; // soukromé / firma
+export type TutoringPlace = 'library' | 'office'; // knihovna / kancl
+
+export interface TutoringDetails {
+  studentColor: string; // např. "modrá", "červená", "zelená"
+  type: TutoringType;
+  place: TutoringPlace;
+  subject: string; // "M", "ČJ", nebo vlastní
+}
 
 export interface CalendarEvent {
   id: string;
@@ -72,6 +82,7 @@ export interface CalendarEvent {
   endTime?: string; // HH:mm (např. "11:00")
   color: string; // 'blue' | 'indigo' | 'purple' | 'emerald' | 'amber' | 'rose'
   category: EventCategory;
+  tutoring?: TutoringDetails;
   isDone?: boolean;
   createdAt: string;
 }

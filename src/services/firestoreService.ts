@@ -377,6 +377,7 @@ export const createCalendarEvent = async (event: Omit<CalendarEvent, 'id' | 'cre
     endTime: event.endTime,
     color: event.color || 'blue',
     category: event.category || 'event',
+    tutoring: event.tutoring,
     isDone: event.isDone || false,
     createdAt: now
   };
@@ -401,6 +402,7 @@ export const createCalendarEvent = async (event: Omit<CalendarEvent, 'id' | 'cre
     if (event.description) payload.description = event.description;
     if (event.startTime) payload.startTime = event.startTime;
     if (event.endTime) payload.endTime = event.endTime;
+    if (event.tutoring) payload.tutoring = event.tutoring;
 
     await addDoc(collection(db, 'calendar_events'), payload);
   } catch (err) {
