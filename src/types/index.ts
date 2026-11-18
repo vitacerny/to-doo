@@ -59,3 +59,20 @@ export interface ChristmasGift {
   notes?: string;           // Poznámka / velikost / barva
   createdAt: string;
 }
+
+export type EventCategory = 'event' | 'task' | 'meeting' | 'reminder' | 'personal';
+
+export interface CalendarEvent {
+  id: string;
+  userId: string;
+  title: string;
+  description?: string;
+  date: string; // YYYY-MM-DD
+  startTime?: string; // HH:mm (např. "09:30")
+  endTime?: string; // HH:mm (např. "11:00")
+  color: string; // 'blue' | 'indigo' | 'purple' | 'emerald' | 'amber' | 'rose'
+  category: EventCategory;
+  isDone?: boolean;
+  createdAt: string;
+}
+

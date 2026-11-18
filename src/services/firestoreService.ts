@@ -12,7 +12,7 @@ import {
   arrayRemove
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Project, Section, Task, ChristmasGift } from '../types';
+import { Project, Section, Task, ChristmasGift, CalendarEvent } from '../types';
 
 // PROJECTS
 export const subscribeProjects = (callback: (projects: Project[]) => void) => {
@@ -291,6 +291,174 @@ export const deleteChristmasGift = async (giftId: string) => {
   // 2. Best-effort Firestore delete
   try {
     await deleteDoc(doc(db, 'christmas_gifts', giftId));
+  } catch (err) {
+    console.warn("Firestore delete skipped, deleted locally:", err);
+  }
+};
+
+// ==========================================
+// CALENDAR EVENTS (Dual-layer: LocalStorage + Firestore sync)
+// ==========================================
+const getCalendarStorageKey = (userId: string) => `calendar_events_${userId}`;
+
+const getLocalCalendarEvents = (userId: string): CalendarEvent[] => {
+  try {
+    const raw = localStorage.getItem(getCalendarStorageKey(userId));
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+};
+
+const saveLocalCalendarEvents = (userId: string, events: CalendarEvent[]) => {
+  try {
+    localStorage.setItem(getCalendarStorageKey(userId), JSON.stringify(events));
+  } catch (e) {
+    console.error("Error saving local calendar events:", e);
+  }
+};
+
+const notifyCalendarChange = (userId: string) => {
+  window.dispatchEvent(new CustomEvent(`calendar_events_changed_${userId}`));
+};
+
+export const subscribeCalendarEvents = (userId: string, callback: (events: CalendarEvent[]) => void) => {
+  // 1. Return immediately cached data
+  let currentEvents = getLocalCalendarEvents(userId);
+  callback(currentEvents);
+
+  const handleLocalChange = () => {
+    currentEvents = getLocalCalendarEvents(userId);
+    callback(currentEvents);
+  };
+
+  window.addEventListener(`calendar_events_changed_${userId}`, handleLocalChange);
+  window.addEventListener('storage', handleLocalChange);
+
+  // 2. Sync with Firestore if possible
+  let unsubFirestore: (() => void) | null = null;
+  try {
+    const q = query(collection(db, 'calendar_events'), where('userId', '==', userId));
+    unsubFirestore = onSnapshot(q, (snapshot) => {
+      const remoteEvents: CalendarEvent[] = [];
+      snapshot.forEach((doc) => {
+        remoteEvents.push({ id: doc.id, ...doc.data() } as CalendarEvent);
+      });
+      if (remoteEvents.length > 0) {
+        saveLocalCalendarEvents(userId, remoteEvents);
+        callback(remoteEvents);
+      }
+    }, () => {
+      callback(getLocalCalendarEvents(userId));
+    });
+  } catch {
+    callback(getLocalCalendarEvents(userId));
+  }
+
+  return () => {
+    window.removeEventListener(`calendar_events_changed_${userId}`, handleLocalChange);
+    window.removeEventListener('storage', handleLocalChange);
+    if (unsubFirestore) unsubFirestore();
+  };
+};
+
+export const createCalendarEvent = async (event: Omit<CalendarEvent, 'id' | 'createdAt'>) => {
+  const now = new Date().toISOString();
+  const eventId = 'cal_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+
+  const newEvent: CalendarEvent = {
+    id: eventId,
+    userId: event.userId,
+    title: event.title,
+    description: event.description,
+    date: event.date,
+    startTime: event.startTime,
+    endTime: event.endTime,
+    color: event.color || 'blue',
+    category: event.category || 'event',
+    isDone: event.isDone || false,
+    createdAt: now
+  };
+
+  // 1. Save locally
+  const localList = getLocalCalendarEvents(event.userId);
+  localList.push(newEvent);
+  saveLocalCalendarEvents(event.userId, localList);
+  notifyCalendarChange(event.userId);
+
+  // 2. Best-effort Firestore sync
+  try {
+    const payload: Record<string, any> = {
+      userId: event.userId,
+      title: event.title,
+      date: event.date,
+      color: event.color || 'blue',
+      category: event.category || 'event',
+      isDone: event.isDone || false,
+      createdAt: now
+    };
+    if (event.description) payload.description = event.description;
+    if (event.startTime) payload.startTime = event.startTime;
+    if (event.endTime) payload.endTime = event.endTime;
+
+    await addDoc(collection(db, 'calendar_events'), payload);
+  } catch (err) {
+    console.warn("Firestore sync not available, stored locally:", err);
+  }
+
+  return eventId;
+};
+
+export const updateCalendarEvent = async (eventId: string, data: Partial<CalendarEvent>) => {
+  // 1. Update locally
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('calendar_events_')) {
+      const userId = key.replace('calendar_events_', '');
+      const events = getLocalCalendarEvents(userId);
+      const index = events.findIndex(e => e.id === eventId);
+      if (index !== -1) {
+        events[index] = { ...events[index], ...data };
+        saveLocalCalendarEvents(userId, events);
+        notifyCalendarChange(userId);
+        break;
+      }
+    }
+  }
+
+  // 2. Best-effort Firestore update
+  try {
+    const docRef = doc(db, 'calendar_events', eventId);
+    const payload: Record<string, any> = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (v !== undefined) payload[k] = v;
+    }
+    await updateDoc(docRef, payload);
+  } catch (err) {
+    console.warn("Firestore update skipped, stored locally:", err);
+  }
+};
+
+export const deleteCalendarEvent = async (eventId: string) => {
+  // 1. Delete locally
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('calendar_events_')) {
+      const userId = key.replace('calendar_events_', '');
+      const events = getLocalCalendarEvents(userId);
+      const filtered = events.filter(e => e.id !== eventId);
+      if (filtered.length !== events.length) {
+        saveLocalCalendarEvents(userId, filtered);
+        notifyCalendarChange(userId);
+        break;
+      }
+    }
+  }
+
+  // 2. Best-effort Firestore delete
+  try {
+    await deleteDoc(doc(db, 'calendar_events', eventId));
   } catch (err) {
     console.warn("Firestore delete skipped, deleted locally:", err);
   }

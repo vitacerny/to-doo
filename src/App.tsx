@@ -4,23 +4,27 @@ import { AuthModal } from './components/AuthModal';
 import { Dashboard } from './components/Dashboard';
 import { ProjectDetail } from './components/ProjectDetail';
 import { ChristmasGifts } from './components/ChristmasGifts';
-import { Project, Section, Task, ChristmasGift } from './types';
+import { PlannerCalendar } from './components/PlannerCalendar';
+import { Project, Section, Task, ChristmasGift, CalendarEvent } from './types';
 import { 
   subscribeProjects, 
   subscribeSections, 
   subscribeTasks,
-  subscribeChristmasGifts
+  subscribeChristmasGifts,
+  subscribeCalendarEvents
 } from './services/firestoreService';
-import { LogOut, CheckCircle2, FolderKanban, Gift } from 'lucide-react';
+import { LogOut, CheckCircle2, FolderKanban, Gift, Calendar as CalendarIcon } from 'lucide-react';
 
 export const App: React.FC = () => {
   const { currentUser, userProfile, logout } = useAuth();
-  const [currentModule, setCurrentModule] = useState<'projects' | 'christmas'>('projects');
+  const [currentModule, setCurrentModule] = useState<'projects' | 'planner' | 'christmas'>('projects');
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [sections, setSections] = useState<Section[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [christmasGifts, setChristmasGifts] = useState<ChristmasGift[]>([]);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+  const [allProjectTasks, setAllProjectTasks] = useState<Task[]>([]);
 
   // Subscribe to all projects
   useEffect(() => {
@@ -43,6 +47,40 @@ export const App: React.FC = () => {
     });
     return () => unsub();
   }, [currentUser]);
+
+  // Subscribe to personal Calendar Events for current user
+  useEffect(() => {
+    if (!currentUser) return;
+    const unsub = subscribeCalendarEvents(currentUser.uid, (data) => {
+      setCalendarEvents(data);
+    });
+    return () => unsub();
+  }, [currentUser]);
+
+  // Collect tasks from all projects to display deadlines in the calendar
+  useEffect(() => {
+    if (!currentUser || projects.length === 0) {
+      setAllProjectTasks([]);
+      return;
+    }
+
+    const unsubs: (() => void)[] = [];
+    const tasksMap = new Map<string, Task[]>();
+
+    projects.forEach((proj) => {
+      const unsub = subscribeTasks(proj.id, (projTasks) => {
+        tasksMap.set(proj.id, projTasks);
+        const combined: Task[] = [];
+        tasksMap.forEach((list) => combined.push(...list));
+        setAllProjectTasks(combined);
+      });
+      unsubs.push(unsub);
+    });
+
+    return () => {
+      unsubs.forEach((u) => u());
+    };
+  }, [currentUser, projects]);
 
   // Subscribe to sections and tasks of selected project
   useEffect(() => {
@@ -72,6 +110,11 @@ export const App: React.FC = () => {
 
   const navigateToProjects = () => {
     setCurrentModule('projects');
+    setSelectedProject(null);
+  };
+
+  const navigateToPlanner = () => {
+    setCurrentModule('planner');
     setSelectedProject(null);
   };
 
@@ -120,6 +163,19 @@ export const App: React.FC = () => {
               </button>
 
               <button
+                onClick={navigateToPlanner}
+                className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
+                  currentModule === 'planner'
+                    ? 'bg-white text-indigo-600 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <CalendarIcon className="w-3.5 h-3.5 text-indigo-600" />
+                <span className="hidden sm:inline">Kalendář & Plánovač</span>
+                <span className="sm:hidden">Kalendář</span>
+              </button>
+
+              <button
                 onClick={navigateToChristmas}
                 className={`flex items-center gap-2 px-3 sm:px-4 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
                   currentModule === 'christmas'
@@ -164,6 +220,12 @@ export const App: React.FC = () => {
       <main className="flex-1 flex flex-col">
         {currentModule === 'christmas' ? (
           <ChristmasGifts gifts={christmasGifts} />
+        ) : currentModule === 'planner' ? (
+          <PlannerCalendar
+            events={calendarEvents}
+            projectTasks={allProjectTasks}
+            projects={projects}
+          />
         ) : selectedProject ? (
           <ProjectDetail
             project={selectedProject}
