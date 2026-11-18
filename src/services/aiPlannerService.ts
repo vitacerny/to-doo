@@ -1,5 +1,5 @@
 import { CalendarEvent, TutoringDetails, TutoringPlace, TutoringType, EventCategory } from '../types';
-import { format, addDays, addWeeks, getDay, isBefore } from 'date-fns';
+import { format, addDays, addWeeks, getDay } from 'date-fns';
 
 const GEMINI_API_STORAGE_KEY = 'taskflow_gemini_api_key';
 
@@ -15,7 +15,18 @@ export const setGeminiApiKey = (key: string): void => {
   }
 };
 
+export type AiActionType = 'create' | 'delete';
+
+export interface DeleteCriteria {
+  scope: 'all' | 'date' | 'tutoring_student' | 'specific';
+  date?: string; // YYYY-MM-DD
+  studentColor?: string; // např. "modrá"
+  keyword?: string; // např. "doučování", "zubař"
+}
+
 export interface ParsedEventResult {
+  action: AiActionType; // 'create' | 'delete'
+  deleteCriteria?: DeleteCriteria;
   title: string;
   date: string; // YYYY-MM-DD prvního výskytu
   dates: string[]; // Všechna data (1 nebo více při opakování)
@@ -44,32 +55,19 @@ const mapColorNameToHexOrKey = (colorWord: string): string => {
   return 'indigo';
 };
 
-/**
- * Spolehlivě najde nejbližší budoucí výskyt daného dne v týdnu (1 = pondělí ... 0 = neděle).
- * Pokud je dnes pondělí a uživatel řekne "každé pondělí", posune na příští pondělí (nebo dnes, pokud ještě nebyl čas).
- */
 export const getNextDayOfWeek = (targetDayOfWeek: number, baseDate: Date = new Date()): Date => {
   const result = new Date(baseDate);
   result.setHours(0, 0, 0, 0);
-  const currentDay = getDay(result); // 0 (Sun) to 6 (Sat)
+  const currentDay = getDay(result);
   
   let daysToAdd = (targetDayOfWeek - currentDay + 7) % 7;
-  // Pokud je to dnes (daysToAdd === 0), ale uživatel plánuje "každé pondělí",
-  // raději plánujeme ode dneška pokud ještě není večer, nebo ode dneška jako startovní lekce
-  if (daysToAdd === 0) {
-    // Pokud je dnes stejný den, první lekce je dnes
-    daysToAdd = 0;
-  }
   return addDays(result, daysToAdd);
 };
 
-/**
- * Odstranění zdvořilostního balastu, časových údajů a instrukčních slov
- */
 export const cleanTextNoise = (text: string): string => {
   return text
     .replace(/\b(?:prosím|prosim|děkuji|dekuji|chtěl bych|chtel bych|potřebuji|potrebuji|mohl bys|můžeš|muzes|naplánuj|naplanuj|přidej|pridej|nastav|vytvoř|vytvor|dej mi|dej)\b/gi, '')
-    .replace(/\b(?:každé|kazde|každý|kazdy|každou|kazdou|každou|pravidelně|pravidelne)\s*(?:pondělí|pondelí|pondelí|úterý|utery|středu|stredu|čtvrtek|ctvrtek|pátek|patek|sobotu|neděli|nedeli)?/gi, '')
+    .replace(/\b(?:každé|kazde|každý|kazdy|každou|kazdou|pravidelně|pravidelne)\s*(?:pondělí|pondelí|úterý|utery|středu|stredu|čtvrtek|ctvrtek|pátek|patek|sobotu|neděli|nedeli)?/gi, '')
     .replace(/\b(?:pondělí|pondelí|úterý|utery|středu|stredu|streda|čtvrtek|ctvrtek|pátek|patek|sobotu|sobota|neděli|nedele)\b/gi, '')
     .replace(/\b(?:dnes|zítra|zitra|pozítří|pozitri)\b/gi, '')
     .replace(/\b(?:v\s*)?\d{1,2}(?::\d{2}|\s*h(?:odin)?)?\b/gi, '')
@@ -80,19 +78,121 @@ export const cleanTextNoise = (text: string): string => {
 };
 
 /**
- * Fallback parser s neprůstřelnou logikou pro dny a čisté názvy
+ * Detekce požadavku na smazání / zrušení
+ */
+export const isDeleteIntent = (text: string): boolean => {
+  const l = text.toLowerCase();
+  return (
+    l.includes('zruš') || l.includes('zrus') ||
+    l.includes('smaž') || l.includes('smaz') ||
+    l.includes('odstraň') || l.includes('odstran') ||
+    l.includes('vymaž') || l.includes('vymaz')
+  );
+};
+
+/**
+ * Fallback parser pro mazání i vytváření
  */
 export const parseEventWithRules = (text: string): ParsedEventResult => {
   const lower = text.toLowerCase();
   const now = new Date();
   let targetDate = new Date();
 
-  // 1. Zjištění opakování (Recurrence)
+  // === 1. OBSLUHA MAZÁNÍ (DELETE) ===
+  if (isDeleteIntent(text)) {
+    // a) Zruš úplně všechno
+    if (lower.includes('všechno') || lower.includes('vsechno') || lower.includes('všechny') || lower.includes('úplně vše') || lower.includes('uplne vse')) {
+      // zruš všechno na zítra / dnes / v pondělí
+      let specificDate: string | undefined;
+      let dayDesc = 'všechny události v kalendáři';
+
+      if (lower.includes('zítra') || lower.includes('zitra')) {
+        specificDate = format(addDays(now, 1), 'yyyy-MM-dd');
+        dayDesc = 'všechny události na zítřek';
+      } else if (lower.includes('dnes')) {
+        specificDate = format(now, 'yyyy-MM-dd');
+        dayDesc = 'všechny události na dnešek';
+      } else if (lower.includes('pozítří') || lower.includes('pozitri')) {
+        specificDate = format(addDays(now, 2), 'yyyy-MM-dd');
+        dayDesc = 'všechny události na pozítří';
+      }
+
+      return {
+        action: 'delete',
+        deleteCriteria: {
+          scope: specificDate ? 'date' : 'all',
+          date: specificDate
+        },
+        title: 'Smazání',
+        date: specificDate || format(now, 'yyyy-MM-dd'),
+        dates: [],
+        category: 'event',
+        color: 'rose',
+        source: 'rules',
+        aiReply: `Mažu ${dayDesc}.`
+      };
+    }
+
+    // b) Zruš konkrétní datum (např. "zruš zítra", "smaž pátek")
+    const dayPatterns: { names: string[]; dayNum: number }[] = [
+      { names: ['pondělí', 'pondeli', 'po'], dayNum: 1 },
+      { names: ['úterý', 'utery', 'út', 'ut'], dayNum: 2 },
+      { names: ['střed', 'stred', 'st'], dayNum: 3 },
+      { names: ['čtvrt', 'ctvrt', 'čt', 'ct'], dayNum: 4 },
+      { names: ['pátek', 'patek', 'pá', 'pa'], dayNum: 5 },
+      { names: ['sobot', 'so'], dayNum: 6 },
+      { names: ['neděl', 'nedel', 'ne'], dayNum: 0 }
+    ];
+
+    let deleteDate: string | undefined;
+    for (const p of dayPatterns) {
+      if (p.names.some(name => lower.includes(name))) {
+        deleteDate = format(getNextDayOfWeek(p.dayNum, now), 'yyyy-MM-dd');
+        break;
+      }
+    }
+    if (!deleteDate) {
+      if (lower.includes('zítra') || lower.includes('zitra')) deleteDate = format(addDays(now, 1), 'yyyy-MM-dd');
+      else if (lower.includes('dnes')) deleteDate = format(now, 'yyyy-MM-dd');
+      else if (lower.includes('pozítří') || lower.includes('pozitri')) deleteDate = format(addDays(now, 2), 'yyyy-MM-dd');
+    }
+
+    // Student barva v požadavku na smazání
+    let studentColor: string | undefined;
+    const colorNames = ['červená', 'červený', 'modrá', 'modrý', 'zelená', 'zelený', 'žlutá', 'žlutý', 'oranžová', 'fialová', 'bílá', 'černá'];
+    for (const cn of colorNames) {
+      if (lower.includes(cn)) {
+        studentColor = cn.replace(/[ýy]/, 'á').replace(/a$/, 'á');
+        break;
+      }
+    }
+
+    return {
+      action: 'delete',
+      deleteCriteria: {
+        scope: studentColor ? 'tutoring_student' : (deleteDate ? 'date' : 'specific'),
+        date: deleteDate,
+        studentColor,
+        keyword: studentColor ? undefined : cleanTextNoise(text)
+      },
+      title: 'Smazání',
+      date: deleteDate || format(now, 'yyyy-MM-dd'),
+      dates: [],
+      category: 'event',
+      color: 'rose',
+      source: 'rules',
+      aiReply: studentColor 
+        ? `Mažu doučování se studentem (${studentColor})${deleteDate ? ` pro datum ${deleteDate}` : ''}.`
+        : `Ruším naplánované události.`
+    };
+  }
+
+  // === 2. OBSLUHA VYTVÁŘENÍ (CREATE) ===
   const isRecurring = lower.includes('každ') || lower.includes('kazd') || lower.includes('pravidelně') || lower.includes('pravidelne');
   let repeatCount = 1;
 
   if (isRecurring) {
-    repeatCount = 8; // Výchozí 8 lekcí (cca 2 měsíce)
+    repeatCount = 8;
     const countMatch = lower.match(/(\d+)\s*(?:lekc|týdn|tydn|měsíc|mesic|x)/i);
     if (countMatch) {
       const num = parseInt(countMatch[1], 10);
@@ -104,7 +204,6 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
     }
   }
 
-  // 2. Přesné dny v týdnu (1 = pondělí ... 0 = neděle)
   const dayPatterns: { names: string[]; dayNum: number }[] = [
     { names: ['pondělí', 'pondeli', 'po'], dayNum: 1 },
     { names: ['úterý', 'utery', 'út', 'ut'], dayNum: 2 },
@@ -133,7 +232,6 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
     targetDate = now;
   }
 
-  // 3. Čas
   let startTime: string | undefined;
   let endTime: string | undefined;
 
@@ -150,7 +248,6 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
     }
   }
 
-  // 4. Generování termínů
   const dates: string[] = [];
   if (isRecurring && repeatCount > 1) {
     for (let i = 0; i < repeatCount; i++) {
@@ -160,7 +257,6 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
     dates.push(format(targetDate, 'yyyy-MM-dd'));
   }
 
-  // 5. Doučování vs. Obecná událost
   const isTutoring = lower.includes('douč') || lower.includes('douc') || lower.includes('lekc') || lower.includes('student');
 
   if (isTutoring) {
@@ -194,7 +290,7 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
       if (type === 'company') {
         place = 'office';
       } else {
-        place = 'library'; // Pravidlo: soukromé nesmí do kanclu
+        place = 'library';
       }
     }
 
@@ -209,7 +305,6 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
       subject = 'FYZ';
     }
 
-    // ČISTÝ NÁZEV BEZ BALASTU
     const cleanTitle = `Doučování ${subject} (${studentColor})`;
     const colorKey = mapColorNameToHexOrKey(studentColor);
 
@@ -218,6 +313,7 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
       : `Naplánováno: ${cleanTitle} (${type === 'private' ? 'soukromé' : 'firma'}, ${place === 'library' ? 'knihovna' : 'kancl'}) na ${format(targetDate, 'd. M. yyyy')}${startTime ? ` v ${startTime}` : ''}.`;
 
     return {
+      action: 'create',
       title: cleanTitle,
       date: format(targetDate, 'yyyy-MM-dd'),
       dates,
@@ -225,7 +321,6 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
       endTime,
       category: 'tutoring',
       color: colorKey,
-      description: undefined, // Žádná zbytečná slova z promptu
       tutoring: {
         studentColor,
         type,
@@ -238,12 +333,12 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
     };
   }
 
-  // Obecná událost s vyčištěným názvem
   let pureTitle = cleanTextNoise(text);
   if (!pureTitle) pureTitle = 'Událost';
   pureTitle = pureTitle.charAt(0).toUpperCase() + pureTitle.slice(1);
 
   return {
+    action: 'create',
     title: pureTitle,
     date: format(targetDate, 'yyyy-MM-dd'),
     dates,
@@ -251,7 +346,6 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
     endTime,
     category: 'event',
     color: 'blue',
-    description: undefined,
     recurrence: isRecurring ? { type: 'weekly', count: repeatCount } : undefined,
     source: 'rules',
     aiReply: isRecurring
@@ -261,7 +355,7 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
 };
 
 /**
- * Gemini Flash s přísnými instrukcemi proti balastu a správným výpočtem termínů
+ * Gemini Flash s podporou mazání a vytváření
  */
 export const parseEventWithGemini = async (
   promptText: string,
@@ -273,32 +367,39 @@ export const parseEventWithGemini = async (
   }
 
   const systemInstruction = `
-Jsi precizní plánovač kalendáře TaskFlow.
+Jsi inteligentní plánovač kalendáře TaskFlow.
 Dnešní datum je: ${userLocalDate}.
 
-PŘÍSNÁ PRAVIDLA PRO NÁZVY A POPISY:
-1. ZÁKAZ BALASTU: Nikdy do "title" ani "description" nedávej slova jako "prosím", "chtěl bych", "naplánuj", "přidej", dny v týdnu ani časy.
-2. NÁZEV DOUČOVÁNÍ: Pokud se jedná o doučování, "title" MUSÍ mít POUZE a VÝHRADNĚ tvar:
-   "Doučování {Předmět} ({Barva studenta})" -> např. "Doučování M (zelená)", "Doučování ČJ (modrá)".
-3. "description": Nech null, pokud uživatel výslovně nespecifikoval konkrétní studijní látku (např. "téma kvadratické rovnice"). ŽÁDNÝ zdvořilostní text tam nesmí být!
+AKCE UŽIVATELE:
+Uživatel chce buď VYTVIŘIT událost ("create") nebo SMAZAT/ZRUŠIT událost ("delete").
 
-PRAVIDLA PRO OPAKOVÁNÍ (každé pondělí, každý týden atd.):
-- "isRecurring": true pokud uživatel chce opakování ("každé pondělí", "pravidelně", "X lekcí").
-- "recurrenceCount": počet týdnů (pokud uživatel neuvede, nastav 8).
-- "date": přesné datum PRVNÍHO výskytu. Pokud dnes není daný den (např. dnes je středa a uživatel řekne "každé pondělí"), datum PRVNÍHO výskytu MUSÍ být nejbližší nadcházející pondělí!
-
-PRAVIDLA PRO DOUČOVÁNÍ:
-- "category": "tutoring"
-- "tutoring": {
-    "studentColor": string (barva slovy, např. "červená", "zelená", "modrá"),
-    "type": "private" | "company",
-    "place": "library" | "office",
-    "subject": string ("M", "ČJ", nebo vlastní)
+Pokud uživatel chce SMAZAT / ZRUŠIT události (např. "zruš zítra", "zruš všechno na zítra", "smaž úplně všechno", "zruš doučování se studentem červená"):
+- "action": "delete"
+- "deleteCriteria": {
+    "scope": "all" (pro úplně všechno) | "date" (pro dané datum) | "tutoring_student" (pro doučování daného studenta) | "specific" (ostatní),
+    "date": "YYYY-MM-DD" nebo null,
+    "studentColor": barva slovy nebo null,
+    "keyword": hledané klíčové slovo (např. "doučování", "zubař") nebo null
   }
-- PRAVIDLO MÍSTA: Soukromé doučování ("private") NIKDY nesmí být v kanclu ("office")! Pokud uživatel požaduje soukromé v kanclu, automaticky nastav "place": "library" a v "aiReply" to slušně vysvětli.
+- "aiReply": Stručná odpověď, co se maže (např. "Mažu všechny události na zítřek." nebo "Mažu doučování se studentem červená.").
+
+Pokud uživatel chce VYTVOŘIT událost ("create"):
+- "action": "create"
+- "title": Pro doučování VÝHRADNĚ tvar: "Doučování {Předmět} ({Barva studenta})".
+- ZÁKAZ BALASTU: Žádné "prosím", "chtěl bych" v title ani description.
+- "date": přesné datum PRVNÍHO výskytu.
+- "isRecurring": true při opakování (např. "každé pondělí"), recurrenceCount (týdny).
+- "tutoring": pokud jde o doučování, povinně studentColor, type ('private'|'company'), place ('library'|'office'), subject ('M'|'ČJ'|jiné). Soukromé ("private") nesmí být v kanclu ("office").
 
 Odpověz POUZE validním JSON objektem:
 {
+  "action": "create" | "delete",
+  "deleteCriteria": {
+    "scope": "all" | "date" | "tutoring_student" | "specific",
+    "date": "YYYY-MM-DD" | null,
+    "studentColor": string | null,
+    "keyword": string | null
+  } | null,
   "title": string,
   "date": "YYYY-MM-DD",
   "isRecurring": boolean,
@@ -341,7 +442,7 @@ Odpověz POUZE validním JSON objektem:
     });
 
     if (!response.ok) {
-      console.warn("Gemini API call returned status:", response.status);
+      console.warn("Gemini API call failed, falling back to rules:", response.status);
       return parseEventWithRules(promptText);
     }
 
@@ -351,7 +452,22 @@ Odpověz POUZE validním JSON objektem:
 
     const parsed = JSON.parse(candidateText);
 
-    // Vynucení čistého formátu pro doučování
+    // Pokud je to mazání
+    if (parsed.action === 'delete') {
+      return {
+        action: 'delete',
+        deleteCriteria: parsed.deleteCriteria || { scope: 'all' },
+        title: 'Smazání',
+        date: parsed.deleteCriteria?.date || format(new Date(), 'yyyy-MM-dd'),
+        dates: [],
+        category: 'event',
+        color: 'rose',
+        source: 'gemini',
+        aiReply: parsed.aiReply || 'Mažu zvolené události.'
+      };
+    }
+
+    // Jinak vytváření
     if (parsed.tutoring) {
       if (parsed.tutoring.type === 'private' && parsed.tutoring.place === 'office') {
         parsed.tutoring.place = 'library';
@@ -361,15 +477,8 @@ Odpověz POUZE validním JSON objektem:
       if (!parsed.tutoring.type) parsed.tutoring.type = 'private';
       if (!parsed.tutoring.place) parsed.tutoring.place = 'library';
 
-      // Garantujeme čistý název bez ohledu na to, co Gemini vygeneroval
       parsed.title = `Doučování ${parsed.tutoring.subject} (${parsed.tutoring.studentColor})`;
       parsed.color = mapColorNameToHexOrKey(parsed.tutoring.studentColor);
-    }
-
-    // Vyčištění popisu od zdvořilostí
-    if (parsed.description) {
-      const cleanDesc = cleanTextNoise(parsed.description);
-      parsed.description = cleanDesc.length > 2 ? cleanDesc : undefined;
     }
 
     const firstDate = parsed.date || format(new Date(), 'yyyy-MM-dd');
@@ -387,6 +496,7 @@ Odpověz POUZE validním JSON objektem:
     }
 
     return {
+      action: 'create',
       title: parsed.title,
       date: firstDate,
       dates,
@@ -401,7 +511,7 @@ Odpověz POUZE validním JSON objektem:
       aiReply: parsed.aiReply || `Událost byla úspěšně naplánována.`
     };
   } catch (err) {
-    console.error("Gemini API error, falling back to rules:", err);
+    console.error("Gemini API error, fallback to rules:", err);
     return parseEventWithRules(promptText);
   }
 };

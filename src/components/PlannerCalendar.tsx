@@ -339,6 +339,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     <div className="max-w-7xl mx-auto w-full p-4 sm:p-6 space-y-6">
       {/* AI Assistant Banner */}
       <AiAssistantBar
+        events={events}
         onEventCreated={(targetDateStr) => {
           try {
             setCurrentDate(new Date(targetDateStr));

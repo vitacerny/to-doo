@@ -1,16 +1,16 @@
 import React, { useState } from 'react';
-import { Sparkles, Send, Settings, Check, AlertCircle, Key, Loader2, Calendar, Clock } from 'lucide-react';
+import { Sparkles, Send, Check, AlertCircle, Key, Loader2, Trash2 } from 'lucide-react';
 import { getGeminiApiKey, setGeminiApiKey, parseEventWithGemini, ParsedEventResult } from '../services/aiPlannerService';
-import { createCalendarEvent } from '../services/firestoreService';
+import { createCalendarEvent, deleteCalendarEvent } from '../services/firestoreService';
+import { CalendarEvent } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { format } from 'date-fns';
-import { cs } from 'date-fns/locale';
 
 interface AiAssistantBarProps {
+  events: CalendarEvent[];
   onEventCreated?: (eventDate: string) => void;
 }
 
-export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ onEventCreated }) => {
+export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ events, onEventCreated }) => {
   const { currentUser } = useAuth();
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
@@ -40,10 +40,55 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ onEventCreated }
       const apiKey = getGeminiApiKey();
       const parsed: ParsedEventResult = await parseEventWithGemini(prompt.trim(), apiKey);
 
+      // === 1. OBSLUHA MAZÁNÍ (DELETE) ===
+      if (parsed.action === 'delete') {
+        const crit = parsed.deleteCriteria;
+        let eventsToDelete: CalendarEvent[] = [];
+
+        if (crit?.scope === 'all') {
+          // Zruš úplně všechno
+          eventsToDelete = [...events];
+        } else if (crit?.scope === 'date' && crit.date) {
+          // Zruš všechno na konkrétní den
+          eventsToDelete = events.filter(ev => ev.date === crit.date);
+        } else if (crit?.studentColor) {
+          // Zruš doučování se studentem dané barvy
+          eventsToDelete = events.filter(ev => {
+            const matchStudent = ev.tutoring?.studentColor?.toLowerCase().includes(crit.studentColor!.toLowerCase()) ||
+              ev.title.toLowerCase().includes(crit.studentColor!.toLowerCase());
+            const matchDate = crit.date ? ev.date === crit.date : true;
+            return matchStudent && matchDate;
+          });
+        } else if (crit?.date) {
+          eventsToDelete = events.filter(ev => ev.date === crit.date);
+        } else if (crit?.keyword) {
+          const kw = crit.keyword.toLowerCase();
+          eventsToDelete = events.filter(ev => 
+            ev.title.toLowerCase().includes(kw) ||
+            ev.description?.toLowerCase().includes(kw)
+          );
+        }
+
+        if (eventsToDelete.length === 0) {
+          setSuccessMessage('Nebyly nalezeny žádné odpovídající události k odstranění.');
+        } else {
+          for (const ev of eventsToDelete) {
+            await deleteCalendarEvent(ev.id);
+          }
+          setSuccessMessage(
+            `Smazáno celkem ${eventsToDelete.length} ${eventsToDelete.length === 1 ? 'událost' : eventsToDelete.length < 5 ? 'události' : 'událostí'}.`
+          );
+        }
+
+        setPrompt('');
+        setTimeout(() => setSuccessMessage(null), 5000);
+        return;
+      }
+
+      // === 2. OBSLUHA VYTVÁŘENÍ (CREATE) ===
       const targetDates = parsed.dates && parsed.dates.length > 0 ? parsed.dates : [parsed.date];
       const seriesId = targetDates.length > 1 ? 'series_' + Date.now() : undefined;
 
-      // Uložíme všechny výskyty (pokud jde o opakování, vytvoří celou sérii)
       for (const d of targetDates) {
         await createCalendarEvent({
           userId: currentUser.uid,
@@ -60,7 +105,6 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ onEventCreated }
         });
       }
 
-      // Zobrazíme hezkou zprávu
       setSuccessMessage(
         parsed.aiReply || `Naplánováno: ${parsed.title} (${targetDates.length > 1 ? `${targetDates.length} týdnů` : parsed.date}${parsed.startTime ? ` v ${parsed.startTime}` : ''})`
       );
@@ -75,7 +119,7 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ onEventCreated }
       }, 5000);
     } catch (err) {
       console.error("AI Planner error:", err);
-      alert("Nepodařilo se naplánovat událost. Zkuste to prosím znovu.");
+      alert("Nepodařilo se požadavek zpracovat. Zkuste to prosím znovu.");
     } finally {
       setLoading(false);
     }
@@ -85,12 +129,10 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ onEventCreated }
 
   return (
     <div className="bg-gradient-to-r from-indigo-900 via-indigo-800 to-purple-900 rounded-2xl p-4 sm:p-5 text-white shadow-lg relative overflow-hidden">
-      {/* Background glow effects */}
       <div className="absolute top-0 right-0 -mt-8 -mr-8 w-44 h-44 bg-indigo-500/20 rounded-full blur-2xl pointer-events-none" />
       <div className="absolute bottom-0 left-1/3 -mb-8 w-40 h-40 bg-purple-500/20 rounded-full blur-2xl pointer-events-none" />
 
       <div className="relative z-10 space-y-3">
-        {/* Top bar info */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-white/10 backdrop-blur-md flex items-center justify-center text-amber-300">
@@ -122,7 +164,6 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ onEventCreated }
           </button>
         </div>
 
-        {/* API Key Modal / Dropdown Settings */}
         {showSettings && (
           <form
             onSubmit={handleSaveApiKey}
@@ -144,7 +185,7 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ onEventCreated }
                   >
                     aistudio.google.com
                   </a>{' '}
-                  (stačí kliknout na "Get API key" se svým Google účtem).
+                  (klikněte na "Get API key" se svým Google účtem).
                 </p>
               </div>
             </div>
@@ -173,7 +214,6 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ onEventCreated }
           </form>
         )}
 
-        {/* Main AI Input Form */}
         <form onSubmit={handleSubmit} className="flex gap-2">
           <div className="relative flex-1">
             <input
@@ -181,7 +221,7 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ onEventCreated }
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               disabled={loading}
-              placeholder="Např.: „Zítra v 15:00 zubař“, „V pátek v 10 schůzka s týmem“, „V neděli koupit dárek pro mámu“..."
+              placeholder="Např.: „Každé pondělí v 15:00 doučování M (zelená)“, „Zruš všechno na zítra“, „Smaž úplně všechno“..."
               className="w-full bg-white/15 border border-white/20 hover:border-white/30 focus:border-amber-300 focus:bg-white/20 text-white placeholder-white/60 text-xs sm:text-sm rounded-xl px-4 py-3 pr-10 focus:outline-hidden transition shadow-inner"
             />
           </div>
@@ -194,18 +234,17 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ onEventCreated }
             {loading ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span className="hidden sm:inline">Plánuji...</span>
+                <span className="hidden sm:inline">Zpracovávám...</span>
               </>
             ) : (
               <>
                 <Send className="w-4 h-4" />
-                <span className="hidden sm:inline">Naplánovat</span>
+                <span className="hidden sm:inline">Odeslat</span>
               </>
             )}
           </button>
         </form>
 
-        {/* Success toast feedback */}
         {successMessage && (
           <div className="flex items-center gap-2 p-2.5 bg-emerald-500/25 border border-emerald-400/40 rounded-xl text-emerald-200 text-xs animate-in fade-in slide-in-from-top-1">
             <Check className="w-4 h-4 text-emerald-300 shrink-0" />
