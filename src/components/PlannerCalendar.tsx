@@ -6,7 +6,8 @@ import {
   updateCalendarEvent, 
   deleteCalendarEvent,
   rebalanceTutoringSeries,
-  markTutoringAsContinuousForStudent
+  markTutoringAsContinuousForStudent,
+  ensureWednesdayLessonForRedStudent
 } from '../services/firestoreService';
 import { 
   format, 
@@ -201,10 +202,11 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const [customUntilDate, setCustomUntilDate] = useState('2027-04-12');
   const [customWeeks, setCustomWeeks] = useState(8);
 
-  // Při prvním načtení automaticky označíme existující lekce studenta modrá jako průběžná
+  // Při prvním načtení automaticky označíme existující lekce studenta modrá jako průběžná a zajistíme středeční hodinu M pro červenou
   useEffect(() => {
     if (currentUser) {
       markTutoringAsContinuousForStudent(currentUser.uid, 'modrá');
+      ensureWednesdayLessonForRedStudent(currentUser.uid);
     }
   }, [currentUser]);
 

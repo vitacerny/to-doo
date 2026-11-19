@@ -617,6 +617,86 @@ export const rebalanceTutoringSeries = async (
 };
 
 /**
+ * Zajistí přidání jednorázové středeční hodiny Matematiky pro studenta červená, pokud ještě v kalendáři chybí,
+ * a správně zkalibruje střídání předmětů.
+ */
+export const ensureWednesdayLessonForRedStudent = async (userId: string) => {
+  const allEvents = getLocalCalendarEvents(userId);
+  const redEvents = allEvents.filter(e => 
+    e.category === 'tutoring' && 
+    (e.tutoring?.studentColor?.trim().toLowerCase().includes('červen') || e.title.toLowerCase().includes('červen'))
+  );
+
+  if (redEvents.length === 0) return;
+
+  // Najdeme existující sérii studenta červená
+  const seriesEvent = redEvents.find(e => e.recurringSeriesId);
+  const seriesId = seriesEvent?.recurringSeriesId;
+  const pattern = seriesEvent?.tutoring?.sequencePattern || ['ČJ', 'M'];
+
+  // Seřadíme existující lekce chronologicky
+  redEvents.sort((a, b) => a.date.localeCompare(b.date));
+  const firstEventDate = redEvents[0].date; // např. Úterý první lekce
+
+  // Najdeme datum první středy po první lekci (nebo nejbližší středu v týdnu první lekce)
+  // Např. pokud je první lekce Út 2026-11-24, středa je 2026-11-25
+  const d = new Date(firstEventDate + 'T12:00:00');
+  const dayOfWeek = d.getDay(); // 0 ne, 1 po, 2 ut, 3 st...
+  let wedDateStr = '';
+  if (dayOfWeek <= 3) {
+    d.setDate(d.getDate() + (3 - dayOfWeek));
+    wedDateStr = d.toISOString().split('T')[0];
+  } else {
+    // Pokud první lekce byla po středě
+    d.setDate(d.getDate() + (3 - dayOfWeek + 7));
+    wedDateStr = d.toISOString().split('T')[0];
+  }
+
+  // Zkontrolujeme, zda už středa pro červeného studenta neexistuje
+  const exists = allEvents.some(e => 
+    e.date === wedDateStr && 
+    e.category === 'tutoring' && 
+    (e.tutoring?.studentColor?.trim().toLowerCase().includes('červen') || e.title.toLowerCase().includes('červen'))
+  );
+
+  if (!exists && wedDateStr) {
+    const sTime = seriesEvent?.startTime || '16:30';
+    const eTime = seriesEvent?.endTime || '17:30';
+    const place = seriesEvent?.tutoring?.place || 'library';
+    const goal = seriesEvent?.tutoring?.goal || 'exam';
+    const type = seriesEvent?.tutoring?.type || 'company';
+
+    await createCalendarEvent({
+      userId,
+      title: `Doučování M (červená)`,
+      description: 'Mimořádná hodina',
+      date: wedDateStr,
+      startTime: sTime,
+      endTime: eTime,
+      color: 'rose',
+      category: 'tutoring',
+      tutoring: {
+        studentColor: 'červená',
+        type,
+        place,
+        goal,
+        subject: 'M',
+        sequencePattern: pattern,
+        status: 'unprepared'
+      },
+      recurringSeriesId: seriesId,
+      isDone: false
+    });
+
+    // Přebalancujeme celou sérii, aby předměty perfektně seděly
+    await rebalanceTutoringSeries({
+      seriesId,
+      studentColor: 'červená'
+    }, userId);
+  }
+};
+
+/**
  * Označí existující doučování studenta (např. modrá) jako průběžná (goal = 'continuous').
  */
 export const markTutoringAsContinuousForStudent = (userId: string, studentColorName: string) => {
