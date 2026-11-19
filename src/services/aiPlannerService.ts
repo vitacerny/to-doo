@@ -98,19 +98,19 @@ export const isDeleteIntent = (text: string): boolean => {
 
 export const extractDaysOfWeek = (text: string): number[] => {
   const lower = text.toLowerCase();
-  const dayPatterns: { names: string[]; dayNum: number }[] = [
-    { names: ['pondělí', 'pondeli', 'po'], dayNum: 1 },
-    { names: ['úterý', 'utery', 'út', 'ut'], dayNum: 2 },
-    { names: ['střed', 'stred', 'st'], dayNum: 3 },
-    { names: ['čtvrt', 'ctvrt', 'čt', 'ct'], dayNum: 4 },
-    { names: ['pátek', 'patek', 'pá', 'pa'], dayNum: 5 },
-    { names: ['sobot', 'so'], dayNum: 6 },
-    { names: ['neděl', 'nedel', 'ne'], dayNum: 0 }
+  const dayPatterns: { regex: RegExp; dayNum: number }[] = [
+    { regex: /\b(?:pondělí|pondeli|po)\b/i, dayNum: 1 },
+    { regex: /\b(?:úterý|utery|út|ut)\b/i, dayNum: 2 },
+    { regex: /\b(?:středa|středu|streda|stredu|st)\b/i, dayNum: 3 },
+    { regex: /\b(?:čtvrtek|ctvrtek|čt|ct)\b/i, dayNum: 4 },
+    { regex: /\b(?:pátek|patek|pá|pa)\b/i, dayNum: 5 },
+    { regex: /\b(?:sobota|sobotu|so)\b/i, dayNum: 6 },
+    { regex: /\b(?:neděle|neděli|nedele|nedeli|ne)\b/i, dayNum: 0 }
   ];
 
   const found: number[] = [];
   for (const p of dayPatterns) {
-    if (p.names.some(name => lower.includes(name))) {
+    if (p.regex.test(lower)) {
       found.push(p.dayNum);
     }
   }
