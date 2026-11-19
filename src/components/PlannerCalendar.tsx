@@ -125,6 +125,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   // Tutoring Schedule / Recurrence Options
   const [isRecurring, setIsRecurring] = useState(true);
   const [selectedDays, setSelectedDays] = useState<number[]>([]); // Výchozí žádný den
+  const [dayTimes, setDayTimes] = useState<Record<number, { startTime: string; endTime: string }>>({});
   const [alternateSubjects, setAlternateSubjects] = useState(false); // Výchozí nestřídat
   const [alternateOrder, setAlternateOrder] = useState<'M_CJ' | 'CJ_M'>('M_CJ');
   const [untilPreset, setUntilPreset] = useState<'prijimacky' | 'skolni_rok' | 'custom' | 'weeks'>('skolni_rok');
@@ -166,6 +167,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     setCustomSubject('');
     setIsRecurring(true); // Výchozí opakování zaškrtnuto
     setSelectedDays([]); // Žádný předem vybraný den
+    setDayTimes({});
     setAlternateSubjects(false); // Výchozí nestřídat
     setAlternateOrder('M_CJ');
     setUntilPreset('skolni_rok'); // U průběžných výchozí do konce školního roku
@@ -224,7 +226,24 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
       setSelectedDays(selectedDays.filter(d => d !== dayId));
     } else {
       setSelectedDays([...selectedDays, dayId].sort((a, b) => a - b));
+      // Pokud den ještě nemá individuální čas, inicializujeme ho výchozím časem
+      if (!dayTimes[dayId]) {
+        setDayTimes(prev => ({
+          ...prev,
+          [dayId]: { startTime: startTime || '16:30', endTime: endTime || '17:30' }
+        }));
+      }
     }
+  };
+
+  const updateDayTime = (dayId: number, field: 'startTime' | 'endTime', value: string) => {
+    setDayTimes(prev => ({
+      ...prev,
+      [dayId]: {
+        startTime: field === 'startTime' ? value : (prev[dayId]?.startTime || startTime || '16:30'),
+        endTime: field === 'endTime' ? value : (prev[dayId]?.endTime || endTime || '17:30')
+      }
+    }));
   };
 
   // Vypočte cílové mezní datum
@@ -341,7 +360,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           return addDays(res, daysToAdd);
         }).sort((a, b) => a.getTime() - b.getTime());
 
-        const occurrences: { date: string; subject: string }[] = [];
+        const occurrences: { date: string; subject: string; sTime?: string; eTime?: string }[] = [];
         let patternIdx = 0;
         let weekOffset = 0;
         const maxWeeks = 40;
@@ -352,7 +371,14 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
             if (curDate > untilDate) break;
             const curDateStr = format(curDate, 'yyyy-MM-dd');
             const subj = pattern[patternIdx % pattern.length];
-            occurrences.push({ date: curDateStr, subject: subj });
+            const dayNum = getDay(curDate);
+            const customT = dayTimes[dayNum] || { startTime, endTime };
+            occurrences.push({ 
+              date: curDateStr, 
+              subject: subj,
+              sTime: customT.startTime || startTime,
+              eTime: customT.endTime || endTime
+            });
             patternIdx++;
           }
           if (addWeeks(dayDates[0], weekOffset + 1) > untilDate) break;
@@ -365,8 +391,13 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           return;
         }
 
-        // Kontrola kolizí
-        const conflicts = checkCollisions(occurrences.map(o => o.date), startTime, endTime);
+        // Kontrola kolizí pro jednotlivé dny
+        const conflicts: string[] = [];
+        for (const occ of occurrences) {
+          const c = checkCollisions([occ.date], occ.sTime, occ.eTime);
+          if (c.length > 0) conflicts.push(...c);
+        }
+
         if (conflicts.length > 0) {
           const proceed = window.confirm(
             `Pozor, v některých termínech máte kolizi s jinou událostí:\n${conflicts.slice(0, 3).join('\n')}${conflicts.length > 3 ? '\na další...' : ''}\n\nChcete doučování přesto naplánovat?`
@@ -386,8 +417,8 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
             title: cleanTitle,
             description: description.trim(),
             date: occ.date,
-            startTime: startTime || undefined,
-            endTime: endTime || undefined,
+            startTime: occ.sTime || undefined,
+            endTime: occ.eTime || undefined,
             color: finalColor,
             category: 'tutoring',
             tutoring: {
@@ -1261,7 +1292,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                             <span className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
                               Vyberte dny v týdnu (např. Úterý a Čtvrtek):
                             </span>
-                            <div className="flex flex-wrap gap-1.5">
+                            <div className="flex flex-wrap gap-1.5 mb-2.5">
                               {DAYS_OF_WEEK.map((d) => {
                                 const isSel = selectedDays.includes(d.id);
                                 return (
@@ -1280,6 +1311,43 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                                 );
                               })}
                             </div>
+
+                            {/* Individuální časy pro každý vybraný den */}
+                            {selectedDays.length > 0 && (
+                              <div className="p-3 bg-white rounded-xl border border-indigo-100 space-y-2">
+                                <span className="block text-[11px] font-bold text-indigo-950 uppercase tracking-wider">
+                                  Čas konání pro jednotlivé dny:
+                                </span>
+                                <div className="space-y-1.5">
+                                  {selectedDays.map(dayId => {
+                                    const dayObj = DAYS_OF_WEEK.find(d => d.id === dayId);
+                                    const currentT = dayTimes[dayId] || { startTime: startTime || '16:30', endTime: endTime || '17:30' };
+                                    return (
+                                      <div key={dayId} className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-slate-50 border border-slate-200/70 text-xs">
+                                        <span className="font-bold text-slate-800 w-20 shrink-0">
+                                          {dayObj?.label}:
+                                        </span>
+                                        <div className="flex items-center gap-1.5">
+                                          <input
+                                            type="time"
+                                            value={currentT.startTime}
+                                            onChange={(e) => updateDayTime(dayId, 'startTime', e.target.value)}
+                                            className="px-2 py-1 bg-white border border-slate-200 rounded-md font-semibold text-slate-800 focus:outline-hidden"
+                                          />
+                                          <span className="text-slate-400">–</span>
+                                          <input
+                                            type="time"
+                                            value={currentT.endTime}
+                                            onChange={(e) => updateDayTime(dayId, 'endTime', e.target.value)}
+                                            className="px-2 py-1 bg-white border border-slate-200 rounded-md font-semibold text-slate-800 focus:outline-hidden"
+                                          />
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           {/* Střídání ČJ a M */}
