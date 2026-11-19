@@ -1,11 +1,12 @@
-import React, { useState, useMemo } from 'react';
-import { CalendarEvent, EventCategory, Task, Project, TutoringDetails, TutoringType, TutoringPlace } from '../types';
+import React, { useState, useMemo, useEffect } from 'react';
+import { CalendarEvent, EventCategory, Task, Project, TutoringDetails, TutoringType, TutoringPlace, TutoringGoal } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { 
   createCalendarEvent, 
   updateCalendarEvent, 
   deleteCalendarEvent,
-  rebalanceTutoringSeries
+  rebalanceTutoringSeries,
+  markTutoringAsContinuousForStudent
 } from '../services/firestoreService';
 import { 
   format, 
@@ -117,6 +118,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const [studentColor, setStudentColor] = useState('');
   const [tutoringType, setTutoringType] = useState<TutoringType>('company');
   const [tutoringPlace, setTutoringPlace] = useState<TutoringPlace>('library');
+  const [tutoringGoal, setTutoringGoal] = useState<TutoringGoal>('continuous'); // Přijímačkové vs Průběžné
   const [subject, setSubject] = useState('M');
   const [customSubject, setCustomSubject] = useState('');
 
@@ -125,9 +127,26 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const [selectedDays, setSelectedDays] = useState<number[]>([]); // Výchozí žádný den
   const [alternateSubjects, setAlternateSubjects] = useState(false); // Výchozí nestřídat
   const [alternateOrder, setAlternateOrder] = useState<'M_CJ' | 'CJ_M'>('M_CJ');
-  const [untilPreset, setUntilPreset] = useState<'prijimacky' | 'skolni_rok' | 'custom' | 'weeks'>('prijimacky');
+  const [untilPreset, setUntilPreset] = useState<'prijimacky' | 'skolni_rok' | 'custom' | 'weeks'>('skolni_rok');
   const [customUntilDate, setCustomUntilDate] = useState('2027-04-12');
   const [customWeeks, setCustomWeeks] = useState(8);
+
+  // Při prvním načtení automaticky označíme existující lekce studenta modrá jako průběžná
+  useEffect(() => {
+    if (currentUser) {
+      markTutoringAsContinuousForStudent(currentUser.uid, 'modrá');
+    }
+  }, [currentUser]);
+
+  // Přepnutí cíle doučování: Přijímačkové -> do přijímaček, Průběžné -> do konce roku
+  const handleGoalChange = (newGoal: TutoringGoal) => {
+    setTutoringGoal(newGoal);
+    if (newGoal === 'exam') {
+      setUntilPreset('prijimacky');
+    } else {
+      setUntilPreset('skolni_rok');
+    }
+  };
 
   // Reset form to defaults
   const handleOpenNewModal = (defaultDate?: string) => {
@@ -142,13 +161,14 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     setStudentColor(''); // Žádný předem připravený student
     setTutoringType('company');
     setTutoringPlace('library');
+    setTutoringGoal('continuous'); // Výchozí průběžné
     setSubject('M'); // Výchozí matematika
     setCustomSubject('');
     setIsRecurring(true); // Výchozí opakování zaškrtnuto
     setSelectedDays([]); // Žádný předem vybraný den
     setAlternateSubjects(false); // Výchozí nestřídat
     setAlternateOrder('M_CJ');
-    setUntilPreset('prijimacky');
+    setUntilPreset('skolni_rok'); // U průběžných výchozí do konce školního roku
     setCustomUntilDate('2027-04-12');
     setCollisionWarning(null);
     setIsModalOpen(true);
@@ -171,6 +191,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
       setStudentColor(ev.tutoring.studentColor || 'červená');
       setTutoringType(ev.tutoring.type || 'company');
       setTutoringPlace(ev.tutoring.place || 'library');
+      setTutoringGoal(ev.tutoring.goal || 'continuous');
       if (['M', 'ČJ'].includes(ev.tutoring.subject)) {
         setSubject(ev.tutoring.subject);
         setCustomSubject('');
@@ -271,6 +292,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           studentColor: studentColor.trim(),
           type: tutoringType,
           place: tutoringPlace,
+          goal: tutoringGoal,
           subject: finalSubject,
           sequencePattern: editingEvent.tutoring?.sequencePattern,
           sequenceIndex: editingEvent.tutoring?.sequenceIndex
@@ -372,6 +394,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
               studentColor: studentColor.trim(),
               type: tutoringType,
               place: tutoringPlace,
+              goal: tutoringGoal,
               subject: occ.subject,
               sequencePattern: pattern,
               sequenceIndex: i
@@ -386,6 +409,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           studentColor: studentColor.trim(),
           type: tutoringType,
           place: tutoringPlace,
+          goal: tutoringGoal,
           subject: finalSubject
         } : undefined;
 
@@ -936,6 +960,9 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                               Student: {tut.studentColor}
                             </span>
                             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-700">
+                              {tut.goal === 'exam' ? '🎯 Přijímačkové' : '📚 Průběžné'}
+                            </span>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-700">
                               {tut.type === 'private' ? 'Soukromé' : 'Firma'}
                             </span>
                             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-700 flex items-center gap-0.5">
@@ -1062,6 +1089,42 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                     <span className="text-[11px] font-semibold text-indigo-600 bg-indigo-100/80 px-2 py-0.5 rounded-full">
                       Pravidla aktivní
                     </span>
+                  </div>
+
+                  {/* Cíl doučování: Přijímačkové vs Průběžné */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Zaměření doučování *
+                    </label>
+                    <div className="grid grid-cols-2 gap-2 bg-white p-1 rounded-xl border border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => handleGoalChange('exam')}
+                        className={`py-2 px-3 text-xs font-bold rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                          tutoringGoal === 'exam'
+                            ? 'bg-amber-500 text-slate-950 shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        <span>🎯 Přijímačkové</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleGoalChange('continuous')}
+                        className={`py-2 px-3 text-xs font-bold rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                          tutoringGoal === 'continuous'
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        <span>📚 Průběžné</span>
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-1 pl-1">
+                      {tutoringGoal === 'exam'
+                        ? 'Automaticky nastaví trvání do přijímaček (12. dubna).'
+                        : 'Automaticky nastaví trvání do konce školního roku (lze upravit níže).'}
+                    </p>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

@@ -64,12 +64,14 @@ export type EventCategory = 'event' | 'task' | 'meeting' | 'tutoring' | 'reminde
 
 export type TutoringType = 'private' | 'company'; // soukromé / firma
 export type TutoringPlace = 'library' | 'office'; // knihovna / kancl
+export type TutoringGoal = 'exam' | 'continuous'; // přijímačkové / průběžné
 
 export interface TutoringDetails {
   studentColor: string; // např. "modrá", "červená", "zelená"
   type: TutoringType;
   place: TutoringPlace;
   subject: string; // "M", "ČJ", nebo vlastní
+  goal?: TutoringGoal; // přijímačkové / průběžné
   sequencePattern?: string[]; // např. ["M", "ČJ"] pro střídání
   sequenceIndex?: number; // pořadí v sérii (0, 1, 2...)
 }

@@ -510,3 +510,33 @@ export const rebalanceTutoringSeries = async (seriesId: string, userId: string) 
     patternIdx++;
   }
 };
+
+/**
+ * Označí existující doučování studenta (např. modrá) jako průběžná (goal = 'continuous').
+ */
+export const markTutoringAsContinuousForStudent = (userId: string, studentColorName: string) => {
+  const allEvents = getLocalCalendarEvents(userId);
+  let updated = false;
+
+  for (let i = 0; i < allEvents.length; i++) {
+    const ev = allEvents[i];
+    const match = ev.tutoring?.studentColor?.toLowerCase().includes(studentColorName.toLowerCase()) ||
+      ev.title.toLowerCase().includes(studentColorName.toLowerCase());
+    
+    if (match && ev.tutoring && ev.tutoring.goal !== 'continuous') {
+      allEvents[i] = {
+        ...ev,
+        tutoring: {
+          ...ev.tutoring,
+          goal: 'continuous'
+        }
+      };
+      updated = true;
+    }
+  }
+
+  if (updated) {
+    saveLocalCalendarEvents(userId, allEvents);
+    notifyCalendarChange(userId);
+  }
+};
