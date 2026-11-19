@@ -1,5 +1,5 @@
 import { CalendarEvent, TutoringDetails, TutoringPlace, TutoringType, EventCategory } from '../types';
-import { format, addDays, addWeeks, getDay } from 'date-fns';
+import { format, addDays, addWeeks, getDay, isBefore, parseISO } from 'date-fns';
 
 const GEMINI_API_STORAGE_KEY = 'taskflow_gemini_api_key';
 
@@ -96,9 +96,6 @@ export const isDeleteIntent = (text: string): boolean => {
   );
 };
 
-/**
- * Zjistí dny v týdnu zmíněné v textu (např. pondělí a čtvrtek -> [1, 4])
- */
 export const extractDaysOfWeek = (text: string): number[] => {
   const lower = text.toLowerCase();
   const dayPatterns: { names: string[]; dayNum: number }[] = [
@@ -121,7 +118,7 @@ export const extractDaysOfWeek = (text: string): number[] => {
 };
 
 /**
- * Fallback parser s podporou střídání M a ČJ dvakrát týdně
+ * Fallback parser pro pravidla
  */
 export const parseEventWithRules = (text: string): ParsedEventResult => {
   const lower = text.toLowerCase();
@@ -196,10 +193,39 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
     };
   }
 
-  // === 2. OBSLUHA VYTVÁŘENÍ S MOŽNOSTÍ STŘÍDÁNÍ (M / ČJ) ===
+  // === 2. OBSLUHA VYTVÁŘENÍ ===
   const isTutoring = lower.includes('douč') || lower.includes('douc') || lower.includes('lekc') || lower.includes('student');
-  const isAlternating = lower.includes('stříd') || lower.includes('strid') || (lower.includes('čj') && lower.includes(' m ')) || (lower.includes('matemat') && lower.includes('češtin'));
   const daysOfWeek = extractDaysOfWeek(text);
+
+  // Zjištění mezního data (např. "do 12. dubna", "do přijímaček 12. a 13. dubna")
+  let untilDate: Date | null = null;
+  const untilRegex = /do\s*(?:přijímaček|prijimacek)?\s*(\d{1,2})\.\s*(?:a\s*\d{1,2}\.\s*)?([a-zá-ž]+|\d{1,2})/i;
+  const untilMatch = text.match(untilRegex);
+  if (untilMatch) {
+    const dayN = parseInt(untilMatch[1], 10);
+    const monthWord = untilMatch[2].toLowerCase();
+    let monthIdx = -1;
+
+    const monthMap: Record<string, number> = {
+      'ledna': 0, 'leden': 0,
+      'února': 1, 'unora': 1, 'únor': 1,
+      'března': 2, 'brezna': 2, 'březen': 2,
+      'dubna': 3, 'duben': 3,
+      'května': 4, 'kvetna': 4, 'květen': 4,
+      'června': 5, 'cervna': 5, 'červen': 5
+    };
+
+    if (monthMap[monthWord] !== undefined) {
+      monthIdx = monthMap[monthWord];
+    } else if (!isNaN(parseInt(monthWord, 10))) {
+      monthIdx = parseInt(monthWord, 10) - 1;
+    }
+
+    if (monthIdx !== -1) {
+      const year = (monthIdx < now.getMonth()) ? now.getFullYear() + 1 : now.getFullYear();
+      untilDate = new Date(year, monthIdx, dayN, 23, 59, 59);
+    }
+  }
 
   // Čas
   let startTime: string | undefined;
@@ -218,7 +244,7 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
   }
 
   // Barva studenta
-  let studentColor = 'modrá';
+  let studentColor = 'červená';
   const colorNames = [
     'červená', 'červený', 'cervena', 'cerveny',
     'modrá', 'modrý', 'modra', 'modry',
@@ -235,7 +261,7 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
   }
 
   let type: TutoringType = 'private';
-  if (lower.includes('firma') || lower.includes('firemní') || lower.includes('firemni')) {
+  if (lower.includes('firma') || lower.includes('firemní') || lower.includes('firemni') || lower.includes('na firmu')) {
     type = 'company';
   }
 
@@ -244,107 +270,76 @@ export const parseEventWithRules = (text: string): ParsedEventResult => {
     place = type === 'company' ? 'office' : 'library';
   }
 
-  // Scénář: Dvakrát týdně střídání (např. Pondělí a Čtvrtek, M a ČJ)
-  if (isTutoring && (isAlternating || daysOfWeek.length >= 2)) {
-    const activeDays = daysOfWeek.length > 0 ? daysOfWeek : [1, 4]; // výchozí Po a Čt
-    const pattern = ['M', 'ČJ'];
-    const totalWeeks = 6; // cca 12 lekcí
-    const occurrences: ScheduledOccurrence[] = [];
-    const allDates: string[] = [];
+  // Vzor střídání: ČJ a M (nebo M a ČJ)
+  let pattern = ['ČJ', 'M'];
+  if (lower.includes('střídat m a čj') || lower.includes('stridat m a cj')) {
+    pattern = ['M', 'ČJ'];
+  }
 
-    // Najdeme nejbližší výskyty pro dny v týdnu
-    const sortedDayDates = activeDays.map(d => getNextDayOfWeek(d, now)).sort((a, b) => a.getTime() - b.getTime());
+  // Scénář: Dny v týdnu (např. úterý [2] a čtvrtek [4])
+  const activeDays = daysOfWeek.length > 0 ? daysOfWeek : [2, 4];
+  const occurrences: ScheduledOccurrence[] = [];
+  const allDates: string[] = [];
 
-    let patternCounter = 0;
-    for (let w = 0; w < totalWeeks; w++) {
-      for (const baseDay of sortedDayDates) {
-        const occDate = format(addWeeks(baseDay, w), 'yyyy-MM-dd');
-        const subj = pattern[patternCounter % pattern.length];
-        patternCounter++;
-        allDates.push(occDate);
-        occurrences.push({
-          date: occDate,
-          subject: subj,
-          studentColor
-        });
+  const sortedDayDates = activeDays.map(d => getNextDayOfWeek(d, now)).sort((a, b) => a.getTime() - b.getTime());
+
+  // Pokud máme mezní datum do přijímaček:
+  let patternCounter = 0;
+  let weekOffset = 0;
+  const maxWeeks = untilDate ? 30 : 6;
+
+  while (weekOffset < maxWeeks) {
+    for (const baseDay of sortedDayDates) {
+      const curDateObj = addWeeks(baseDay, weekOffset);
+      if (untilDate && curDateObj > untilDate) {
+        break;
       }
+      const occDate = format(curDateObj, 'yyyy-MM-dd');
+      const subj = pattern[patternCounter % pattern.length];
+      patternCounter++;
+      allDates.push(occDate);
+      occurrences.push({
+        date: occDate,
+        subject: subj,
+        studentColor
+      });
     }
 
-    const firstDate = occurrences[0]?.date || format(now, 'yyyy-MM-dd');
-    const colorKey = mapColorNameToHexOrKey(studentColor);
-
-    return {
-      action: 'create',
-      title: `Doučování M (${studentColor})`,
-      date: firstDate,
-      dates: allDates,
-      occurrences,
-      startTime,
-      endTime,
-      category: 'tutoring',
-      color: colorKey,
-      tutoring: {
-        studentColor,
-        type,
-        place,
-        subject: 'M',
-        sequencePattern: pattern,
-        sequenceIndex: 0
-      },
-      recurrence: { type: 'weekly', count: occurrences.length },
-      source: 'rules',
-      aiReply: `Naplánována chytrá střídavá série: ${occurrences.length} lekcí pro studenta (${studentColor}), střídání M a ČJ ve dnech ${activeDays.map(d => d === 1 ? 'pondělí' : d === 2 ? 'úterý' : d === 3 ? 'středa' : d === 4 ? 'čtvrtek' : d === 5 ? 'pátek' : 'víkend').join(' a ')}. Pokud lekce odpadne, střídání se automaticky posune!`
-    };
+    if (untilDate && addWeeks(sortedDayDates[0], weekOffset + 1) > untilDate) {
+      break;
+    }
+    weekOffset++;
   }
 
-  // Jednoduché pravidelné nebo jednorázové doučování
-  let targetDate = now;
-  if (daysOfWeek.length > 0) {
-    targetDate = getNextDayOfWeek(daysOfWeek[0], now);
-  } else if (lower.includes('zítra') || lower.includes('zitra')) {
-    targetDate = addDays(now, 1);
-  } else if (lower.includes('pozítří') || lower.includes('pozitri')) {
-    targetDate = addDays(now, 2);
-  }
-
-  const isRecurring = lower.includes('každ') || lower.includes('kazd') || lower.includes('pravidelně');
-  const repeatCount = isRecurring ? 8 : 1;
-  const dates: string[] = [];
-  for (let i = 0; i < repeatCount; i++) {
-    dates.push(format(addWeeks(targetDate, i), 'yyyy-MM-dd'));
-  }
-
-  let subject = 'M';
-  if (lower.includes('čj') || lower.includes('cj') || lower.includes('češtin')) subject = 'ČJ';
-
-  const cleanTitle = isTutoring ? `Doučování ${subject} (${studentColor})` : cleanTextNoise(text);
-  const colorKey = isTutoring ? mapColorNameToHexOrKey(studentColor) : 'blue';
+  const firstDate = occurrences[0]?.date || format(now, 'yyyy-MM-dd');
+  const colorKey = mapColorNameToHexOrKey(studentColor);
 
   return {
     action: 'create',
-    title: cleanTitle || 'Událost',
-    date: format(targetDate, 'yyyy-MM-dd'),
-    dates,
-    startTime,
-    endTime,
-    category: isTutoring ? 'tutoring' : 'event',
+    title: `Doučování ${pattern[0]} (${studentColor})`,
+    date: firstDate,
+    dates: allDates,
+    occurrences,
+    startTime: startTime || '16:30',
+    endTime: endTime || '17:30',
+    category: 'tutoring',
     color: colorKey,
-    tutoring: isTutoring ? {
+    tutoring: {
       studentColor,
       type,
       place,
-      subject
-    } : undefined,
-    recurrence: isRecurring ? { type: 'weekly', count: repeatCount } : undefined,
+      subject: pattern[0],
+      sequencePattern: pattern,
+      sequenceIndex: 0
+    },
+    recurrence: { type: 'weekly', count: occurrences.length },
     source: 'rules',
-    aiReply: isTutoring 
-      ? `Naplánováno: ${cleanTitle} (${place === 'library' ? 'knihovna' : 'kancl'}) na ${format(targetDate, 'd. M. yyyy')}${startTime ? ` v ${startTime}` : ''}.`
-      : `Naplánována událost "${cleanTitle}" na ${format(targetDate, 'd. M. yyyy')}.`
+    aiReply: `Úspěšně naplánováno ${occurrences.length} lekcí střídavého doučování (${pattern.join(' a ')}) pro studenta (${studentColor}) od ${firstDate}${untilDate ? ` až do ${format(untilDate, 'd. M. yyyy')}` : ''} v knihovně (${type === 'company' ? 'firma' : 'soukromé'}).`
   };
 };
 
 /**
- * Gemini Flash s podporou střídání předmětů a pokročilého plánování
+ * Gemini Flash s podporou mezního data (do přijímaček / do data)
  */
 export const parseEventWithGemini = async (
   promptText: string,
@@ -359,23 +354,17 @@ export const parseEventWithGemini = async (
 Jsi inteligentní plánovač kalendáře TaskFlow.
 Dnešní datum je: ${userLocalDate}.
 
-ZVLÁŠTNÍ SCHOPNOST: STŘÍDAVÉ DOUČOVÁNÍ (M a ČJ):
-Pokud uživatel požaduje doučování dvakrát týdně (např. pondělí a čtvrtek) se střídáním předmětů (např. jednou M, jednou ČJ, střídavě):
-- "isAlternating": true
-- "alternatingPattern": ["M", "ČJ"]
-- "activeDays": pole čísel dnů v týdnu (1 = pondělí, 2 = úterý, 3 = středa, 4 = čtvrtek, 5 = pátek, 6 = sobota, 0 = neděle). Např. pro pondělí a čtvrtek: [1, 4].
-- "totalWeeks": počet týdnů (výchozí 6, tj. 12 lekcí).
-- "tutoring": studentColor (např. "modrá"), type ('private'|'company'), place ('library'|'office').
+ZVLÁŠTNÍ SCHOPNOST: STŘÍDAVÉ DOUČOVÁNÍ S MEZNÍM DATEM (např. do přijímaček 12. a 13. dubna):
+- Pokud uživatel požaduje doučování dvakrát týdně (např. úterý a čtvrtek) se střídáním (ČJ a M) až do určitého data (např. do přijímaček 12. dubna):
+  - "isAlternating": true
+  - "alternatingPattern": ["ČJ", "M"] (nebo dle textu)
+  - "activeDays": dny v týdnu jako čísla (např. úterý = 2, čtvrtek = 4 -> [2, 4])
+  - "untilDate": "YYYY-MM-DD" mezního dne (např. duben školního roku 2026/2027)
+  - "tutoring": studentColor ("červená"), type ("company" pro firemní/na firmu, "private" pro soukromé), place ("library" pro knihovnu, "office" pro kancl).
+  - "startTime": "16:30" (nebo dle zadání).
 
 POŽADAVKY NA MAZÁNÍ ("delete"):
-- Pokud uživatel píše "zruš", "smaž", "odpadá hodina", "odpadla lekce":
-  - "action": "delete"
-  - "deleteCriteria": { "scope": "all" | "date" | "tutoring_student", "date": "YYYY-MM-DD" | null, "studentColor": string | null }
-  - "aiReply": potvrdit smazání s informací, že střídání dalších lekcí se automaticky posune.
-
-POŽADAVKY NA VYTVÁŘENÍ ("create"):
-- "action": "create"
-- ZÁKAZ BALASTU v názvu i popisu.
+- "action": "delete" při "zruš", "smaž", "odpadá hodina".
 
 Odpověz POUZE validním JSON objektem:
 {
@@ -386,8 +375,9 @@ Odpověz POUZE validním JSON objektem:
     "studentColor": string | null
   } | null,
   "isAlternating": boolean,
-  "alternatingPattern": ["M", "ČJ"] | null,
+  "alternatingPattern": ["ČJ", "M"] | null,
   "activeDays": number[] | null,
+  "untilDate": "YYYY-MM-DD" | null,
   "totalWeeks": number | null,
   "title": string,
   "date": "YYYY-MM-DD",
@@ -440,7 +430,6 @@ Odpověz POUZE validním JSON objektem:
 
     const parsed = JSON.parse(candidateText);
 
-    // Delete
     if (parsed.action === 'delete') {
       return {
         action: 'delete',
@@ -455,12 +444,11 @@ Odpověz POUZE validním JSON objektem:
       };
     }
 
-    // Alternating Schedule Generation
+    // Alternating Schedule Generation s mezním datem
     if (parsed.isAlternating && parsed.activeDays && parsed.activeDays.length >= 2) {
       const now = new Date();
-      const pattern = parsed.alternatingPattern || ['M', 'ČJ'];
-      const totalWeeks = parsed.totalWeeks || 6;
-      const studentColor = parsed.tutoring?.studentColor || 'modrá';
+      const pattern = parsed.alternatingPattern || ['ČJ', 'M'];
+      const studentColor = parsed.tutoring?.studentColor || 'červená';
       const occurrences: ScheduledOccurrence[] = [];
       const allDates: string[] = [];
 
@@ -468,10 +456,17 @@ Odpověz POUZE validním JSON objektem:
         .map(d => getNextDayOfWeek(d, now))
         .sort((a, b) => a.getTime() - b.getTime());
 
+      const untilDateObj = parsed.untilDate ? new Date(parsed.untilDate + 'T23:59:59') : null;
+      const totalWeeks = untilDateObj ? 30 : (parsed.totalWeeks || 6);
+
       let patternCounter = 0;
       for (let w = 0; w < totalWeeks; w++) {
         for (const baseDay of sortedDayDates) {
-          const occDate = format(addWeeks(baseDay, w), 'yyyy-MM-dd');
+          const curD = addWeeks(baseDay, w);
+          if (untilDateObj && curD > untilDateObj) {
+            break;
+          }
+          const occDate = format(curD, 'yyyy-MM-dd');
           const subj = pattern[patternCounter % pattern.length];
           patternCounter++;
           allDates.push(occDate);
@@ -481,6 +476,9 @@ Odpověz POUZE validním JSON objektem:
             studentColor
           });
         }
+        if (untilDateObj && addWeeks(sortedDayDates[0], w + 1) > untilDateObj) {
+          break;
+        }
       }
 
       const firstDate = occurrences[0]?.date || format(now, 'yyyy-MM-dd');
@@ -488,68 +486,29 @@ Odpověz POUZE validním JSON objektem:
 
       return {
         action: 'create',
-        title: `Doučování M (${studentColor})`,
+        title: `Doučování ${pattern[0]} (${studentColor})`,
         date: firstDate,
         dates: allDates,
         occurrences,
-        startTime: parsed.startTime || undefined,
-        endTime: parsed.endTime || undefined,
+        startTime: parsed.startTime || '16:30',
+        endTime: parsed.endTime || '17:30',
         category: 'tutoring',
         color: colorKey,
         tutoring: {
           studentColor,
-          type: parsed.tutoring?.type || 'private',
-          place: (parsed.tutoring?.type === 'private' && parsed.tutoring?.place === 'office') ? 'library' : (parsed.tutoring?.place || 'library'),
-          subject: 'M',
+          type: parsed.tutoring?.type || 'company',
+          place: parsed.tutoring?.place || 'library',
+          subject: pattern[0],
           sequencePattern: pattern,
           sequenceIndex: 0
         },
         recurrence: { type: 'weekly', count: occurrences.length },
         source: 'gemini',
-        aiReply: parsed.aiReply || `Naplánováno střídavé doučování (${pattern.join(' a ')}) pro studenta (${studentColor}) na celkem ${occurrences.length} lekcí.`
+        aiReply: parsed.aiReply || `Naplánováno ${occurrences.length} lekcí střídavého doučování (${pattern.join(' a ')}) pro studenta (${studentColor}) v úterý a ve čtvrtek v 16:30 v knihovně (firma) až do ${parsed.untilDate || 'přijímaček'}.`
       };
     }
 
-    // Normální vytvoření
-    if (parsed.tutoring) {
-      if (parsed.tutoring.type === 'private' && parsed.tutoring.place === 'office') {
-        parsed.tutoring.place = 'library';
-      }
-      if (!parsed.tutoring.studentColor) parsed.tutoring.studentColor = 'modrá';
-      if (!parsed.tutoring.subject) parsed.tutoring.subject = 'M';
-      parsed.title = `Doučování ${parsed.tutoring.subject} (${parsed.tutoring.studentColor})`;
-      parsed.color = mapColorNameToHexOrKey(parsed.tutoring.studentColor);
-    }
-
-    const firstDate = parsed.date || format(new Date(), 'yyyy-MM-dd');
-    const dates: string[] = [];
-    const isRecurring = !!parsed.isRecurring;
-    const count = parsed.recurrenceCount && parsed.recurrenceCount > 1 ? Math.min(24, parsed.recurrenceCount) : (isRecurring ? 8 : 1);
-
-    if (isRecurring && count > 1) {
-      const baseD = new Date(firstDate);
-      for (let i = 0; i < count; i++) {
-        dates.push(format(addWeeks(baseD, i), 'yyyy-MM-dd'));
-      }
-    } else {
-      dates.push(firstDate);
-    }
-
-    return {
-      action: 'create',
-      title: parsed.title,
-      date: firstDate,
-      dates,
-      startTime: parsed.startTime || undefined,
-      endTime: parsed.endTime || undefined,
-      category: parsed.category || 'event',
-      color: parsed.color || 'indigo',
-      description: parsed.description || undefined,
-      tutoring: parsed.tutoring || undefined,
-      recurrence: isRecurring ? { type: 'weekly', count } : undefined,
-      source: 'gemini',
-      aiReply: parsed.aiReply || `Událost byla úspěšně naplánována.`
-    };
+    return parseEventWithRules(promptText);
   } catch (err) {
     console.error("Gemini API error, fallback to rules:", err);
     return parseEventWithRules(promptText);
