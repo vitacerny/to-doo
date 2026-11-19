@@ -121,9 +121,9 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const [customSubject, setCustomSubject] = useState('');
 
   // Tutoring Schedule / Recurrence Options
-  const [isRecurring, setIsRecurring] = useState(false);
+  const [isRecurring, setIsRecurring] = useState(true);
   const [selectedDays, setSelectedDays] = useState<number[]>([]); // Výchozí žádný den
-  const [alternateSubjects, setAlternateSubjects] = useState(false); // Výchozí nevypnuto střídání
+  const [alternateSubjects, setAlternateSubjects] = useState(false); // Výchozí nestřídat
   const [alternateOrder, setAlternateOrder] = useState<'M_CJ' | 'CJ_M'>('M_CJ');
   const [untilPreset, setUntilPreset] = useState<'prijimacky' | 'skolni_rok' | 'custom' | 'weeks'>('prijimacky');
   const [customUntilDate, setCustomUntilDate] = useState('2027-04-12');
@@ -144,7 +144,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     setTutoringPlace('library');
     setSubject('M'); // Výchozí matematika
     setCustomSubject('');
-    setIsRecurring(false); // Výchozí neopakovat, dokud si uživatel nezaškrtne
+    setIsRecurring(true); // Výchozí opakování zaškrtnuto
     setSelectedDays([]); // Žádný předem vybraný den
     setAlternateSubjects(false); // Výchozí nestřídat
     setAlternateOrder('M_CJ');
