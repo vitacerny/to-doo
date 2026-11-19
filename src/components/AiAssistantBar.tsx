@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { Sparkles, Send, Check, AlertCircle, Key, Loader2, Trash2 } from 'lucide-react';
+import { Sparkles, Send, Check, AlertCircle, Key, Loader2, AlertTriangle } from 'lucide-react';
 import { getGeminiApiKey, setGeminiApiKey, parseEventWithGemini, ParsedEventResult } from '../services/aiPlannerService';
-import { createCalendarEvent, deleteCalendarEvent } from '../services/firestoreService';
+import { createCalendarEvent, deleteCalendarEvent, rebalanceTutoringSeries } from '../services/firestoreService';
 import { CalendarEvent } from '../types';
 import { useAuth } from '../context/AuthContext';
 
@@ -15,6 +15,7 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ events, onEventC
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [collisionWarning, setCollisionWarning] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState(getGeminiApiKey());
   const [apiKeySaved, setApiKeySaved] = useState(false);
@@ -29,30 +30,59 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ events, onEventC
     }, 1200);
   };
 
+  /**
+   * Kontrola kolizí (překrývání termínů a časů)
+   */
+  const checkCollisions = (dates: string[], startTime?: string, endTime?: string): string[] => {
+    if (!startTime) return [];
+    const conflicts: string[] = [];
+
+    const toMinutes = (timeStr: string) => {
+      const [h, m] = timeStr.split(':').map(Number);
+      return h * 60 + m;
+    };
+
+    const newStart = toMinutes(startTime);
+    const newEnd = endTime ? toMinutes(endTime) : newStart + 60;
+
+    for (const d of dates) {
+      const dayEvents = events.filter(e => e.date === d && !!e.startTime);
+      for (const ev of dayEvents) {
+        const evStart = toMinutes(ev.startTime!);
+        const evEnd = ev.endTime ? toMinutes(ev.endTime) : evStart + 60;
+
+        // Překryv časových intervalů
+        if (Math.max(newStart, evStart) < Math.min(newEnd, evEnd)) {
+          conflicts.push(`${d} v ${ev.startTime} (${ev.title})`);
+        }
+      }
+    }
+
+    return conflicts;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !prompt.trim() || loading) return;
 
     setLoading(true);
     setSuccessMessage(null);
+    setCollisionWarning(null);
 
     try {
       const apiKey = getGeminiApiKey();
       const parsed: ParsedEventResult = await parseEventWithGemini(prompt.trim(), apiKey);
 
-      // === 1. OBSLUHA MAZÁNÍ (DELETE) ===
+      // === 1. OBSLUHA MAZÁNÍ (DELETE) S AUTOMATICKÝM PŘEPOČTEM STŘÍDÁNÍ ===
       if (parsed.action === 'delete') {
         const crit = parsed.deleteCriteria;
         let eventsToDelete: CalendarEvent[] = [];
 
         if (crit?.scope === 'all') {
-          // Zruš úplně všechno
           eventsToDelete = [...events];
         } else if (crit?.scope === 'date' && crit.date) {
-          // Zruš všechno na konkrétní den
           eventsToDelete = events.filter(ev => ev.date === crit.date);
         } else if (crit?.studentColor) {
-          // Zruš doučování se studentem dané barvy
           eventsToDelete = events.filter(ev => {
             const matchStudent = ev.tutoring?.studentColor?.toLowerCase().includes(crit.studentColor!.toLowerCase()) ||
               ev.title.toLowerCase().includes(crit.studentColor!.toLowerCase());
@@ -72,41 +102,86 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ events, onEventC
         if (eventsToDelete.length === 0) {
           setSuccessMessage('Nebyly nalezeny žádné odpovídající události k odstranění.');
         } else {
+          const affectedSeriesIds = new Set<string>();
           for (const ev of eventsToDelete) {
+            if (ev.recurringSeriesId) affectedSeriesIds.add(ev.recurringSeriesId);
             await deleteCalendarEvent(ev.id);
           }
+
+          // Automatický kaskádový posun / přebalancování zbylých lekcí v sérii!
+          for (const seriesId of affectedSeriesIds) {
+            await rebalanceTutoringSeries(seriesId, currentUser.uid);
+          }
+
           setSuccessMessage(
-            `Smazáno celkem ${eventsToDelete.length} ${eventsToDelete.length === 1 ? 'událost' : eventsToDelete.length < 5 ? 'události' : 'událostí'}.`
+            `Smazáno ${eventsToDelete.length} ${eventsToDelete.length === 1 ? 'událost' : eventsToDelete.length < 5 ? 'události' : 'událostí'}. Střídání zbývajících lekcí bylo automaticky přerovnáno!`
           );
         }
 
         setPrompt('');
-        setTimeout(() => setSuccessMessage(null), 5000);
+        setTimeout(() => setSuccessMessage(null), 6000);
         return;
       }
 
-      // === 2. OBSLUHA VYTVÁŘENÍ (CREATE) ===
+      // === 2. HLÍDÁNÍ KOLIZÍ ===
       const targetDates = parsed.dates && parsed.dates.length > 0 ? parsed.dates : [parsed.date];
+      const conflicts = checkCollisions(targetDates, parsed.startTime, parsed.endTime);
+      if (conflicts.length > 0) {
+        setCollisionWarning(
+          `Upozornění na kolizi: v plánovaném čase už máte jinou aktivitu (${conflicts.slice(0, 2).join(', ')}${conflicts.length > 2 ? ' a další...' : ''}). Akce byla přesto uložena.`
+        );
+      }
+
+      // === 3. OBSLUHA VYTVÁŘENÍ (STŘÍDÁNÍ NEBO STANDARD) ===
       const seriesId = targetDates.length > 1 ? 'series_' + Date.now() : undefined;
 
-      for (const d of targetDates) {
-        await createCalendarEvent({
-          userId: currentUser.uid,
-          title: parsed.title,
-          description: parsed.description,
-          date: d,
-          startTime: parsed.startTime,
-          endTime: parsed.endTime,
-          category: parsed.category,
-          color: parsed.color,
-          tutoring: parsed.tutoring,
-          recurringSeriesId: seriesId,
-          isDone: false
-        });
+      // Pokud máme explicitní střídavé výskyty (M a ČJ):
+      if (parsed.occurrences && parsed.occurrences.length > 0) {
+        for (let i = 0; i < parsed.occurrences.length; i++) {
+          const occ = parsed.occurrences[i];
+          const cleanTitle = `Doučování ${occ.subject} (${occ.studentColor})`;
+          await createCalendarEvent({
+            userId: currentUser.uid,
+            title: cleanTitle,
+            description: parsed.description,
+            date: occ.date,
+            startTime: parsed.startTime,
+            endTime: parsed.endTime,
+            category: 'tutoring',
+            color: parsed.color,
+            tutoring: {
+              studentColor: occ.studentColor,
+              type: parsed.tutoring?.type || 'private',
+              place: parsed.tutoring?.place || 'library',
+              subject: occ.subject,
+              sequencePattern: ['M', 'ČJ'],
+              sequenceIndex: i
+            },
+            recurringSeriesId: seriesId,
+            isDone: false
+          });
+        }
+      } else {
+        // Standardní vytvoření
+        for (const d of targetDates) {
+          await createCalendarEvent({
+            userId: currentUser.uid,
+            title: parsed.title,
+            description: parsed.description,
+            date: d,
+            startTime: parsed.startTime,
+            endTime: parsed.endTime,
+            category: parsed.category,
+            color: parsed.color,
+            tutoring: parsed.tutoring,
+            recurringSeriesId: seriesId,
+            isDone: false
+          });
+        }
       }
 
       setSuccessMessage(
-        parsed.aiReply || `Naplánováno: ${parsed.title} (${targetDates.length > 1 ? `${targetDates.length} týdnů` : parsed.date}${parsed.startTime ? ` v ${parsed.startTime}` : ''})`
+        parsed.aiReply || `Naplánováno: ${parsed.title} (${targetDates.length > 1 ? `${targetDates.length} lekcí` : parsed.date}${parsed.startTime ? ` v ${parsed.startTime}` : ''})`
       );
       setPrompt('');
 
@@ -116,7 +191,7 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ events, onEventC
 
       setTimeout(() => {
         setSuccessMessage(null);
-      }, 5000);
+      }, 6000);
     } catch (err) {
       console.error("AI Planner error:", err);
       alert("Nepodařilo se požadavek zpracovat. Zkuste to prosím znovu.");
@@ -143,11 +218,11 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ events, onEventC
                 AI Asistent Plánování
                 {hasApiKey ? (
                   <span className="text-[10px] bg-emerald-500/30 text-emerald-300 border border-emerald-400/40 px-1.5 py-0.2 rounded-full font-semibold">
-                    Gemini Flash aktivní
+                    Gemini Flash aktivní (střídání & kolize)
                   </span>
                 ) : (
                   <span className="text-[10px] bg-amber-500/30 text-amber-200 border border-amber-400/40 px-1.5 py-0.2 rounded-full font-semibold">
-                    Základní mód (bez API klíče)
+                    Základní mód (střídání & kolize)
                   </span>
                 )}
               </span>
@@ -221,7 +296,7 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ events, onEventC
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               disabled={loading}
-              placeholder="Např.: „Každé pondělí v 15:00 doučování M (zelená)“, „Zruš všechno na zítra“, „Smaž úplně všechno“..."
+              placeholder="Např.: „Doučování modrá dvakrát týdně v pondělí a ve čtvrtek v 15:00, střídat M a ČJ“, „Odpadla hodina v pondělí“..."
               className="w-full bg-white/15 border border-white/20 hover:border-white/30 focus:border-amber-300 focus:bg-white/20 text-white placeholder-white/60 text-xs sm:text-sm rounded-xl px-4 py-3 pr-10 focus:outline-hidden transition shadow-inner"
             />
           </div>
@@ -244,6 +319,13 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({ events, onEventC
             )}
           </button>
         </form>
+
+        {collisionWarning && (
+          <div className="flex items-center gap-2 p-2.5 bg-amber-500/25 border border-amber-400/50 rounded-xl text-amber-200 text-xs animate-in fade-in">
+            <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0" />
+            <span className="font-semibold">{collisionWarning}</span>
+          </div>
+        )}
 
         {successMessage && (
           <div className="flex items-center gap-2 p-2.5 bg-emerald-500/25 border border-emerald-400/40 rounded-xl text-emerald-200 text-xs animate-in fade-in slide-in-from-top-1">

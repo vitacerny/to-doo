@@ -70,6 +70,8 @@ export interface TutoringDetails {
   type: TutoringType;
   place: TutoringPlace;
   subject: string; // "M", "ČJ", nebo vlastní
+  sequencePattern?: string[]; // např. ["M", "ČJ"] pro střídání
+  sequenceIndex?: number; // pořadí v sérii (0, 1, 2...)
 }
 
 export interface CalendarEvent {

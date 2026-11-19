@@ -467,3 +467,46 @@ export const deleteCalendarEvent = async (eventId: string) => {
     console.warn("Firestore delete skipped, deleted locally:", err);
   }
 };
+
+/**
+ * Přeuspořádá střídavé předměty (např. M, ČJ) v celé budoucí sérii doučování po změně nebo smazání lekce.
+ */
+export const rebalanceTutoringSeries = async (seriesId: string, userId: string) => {
+  const allEvents = getLocalCalendarEvents(userId);
+  const seriesEvents = allEvents
+    .filter(e => e.recurringSeriesId === seriesId)
+    .sort((a, b) => {
+      const cmpDate = a.date.localeCompare(b.date);
+      if (cmpDate !== 0) return cmpDate;
+      return (a.startTime || '').localeCompare(b.startTime || '');
+    });
+
+  if (seriesEvents.length === 0) return;
+
+  // Najdeme vzor střídání (např. ["M", "ČJ"])
+  const pattern = seriesEvents[0]?.tutoring?.sequencePattern || ['M', 'ČJ'];
+  if (pattern.length < 2) return;
+
+  // Projdeme sérii od začátku do konce a zajistíme striktní střídání
+  let patternIdx = 0;
+  for (let i = 0; i < seriesEvents.length; i++) {
+    const ev = seriesEvents[i];
+    const expectedSubject = pattern[patternIdx % pattern.length];
+    const studentColor = ev.tutoring?.studentColor || 'modrá';
+    const newTitle = `Doučování ${expectedSubject} (${studentColor})`;
+
+    if (ev.tutoring && (ev.tutoring.subject !== expectedSubject || ev.title !== newTitle)) {
+      const updatedTutoring = {
+        ...ev.tutoring,
+        subject: expectedSubject,
+        sequenceIndex: i,
+        sequencePattern: pattern
+      };
+      await updateCalendarEvent(ev.id, {
+        title: newTitle,
+        tutoring: updatedTutoring
+      });
+    }
+    patternIdx++;
+  }
+};

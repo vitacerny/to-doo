@@ -4,7 +4,8 @@ import { useAuth } from '../context/AuthContext';
 import { 
   createCalendarEvent, 
   updateCalendarEvent, 
-  deleteCalendarEvent 
+  deleteCalendarEvent,
+  rebalanceTutoringSeries
 } from '../services/firestoreService';
 import { 
   format, 
@@ -217,6 +218,11 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           category,
           tutoring: tutoringPayload
         });
+
+        // Pokud šlo o doučování ze série se střídáním a uživatel ručně změnil předmět:
+        if (editingEvent.recurringSeriesId && editingEvent.tutoring?.sequencePattern) {
+          await rebalanceTutoringSeries(editingEvent.recurringSeriesId, currentUser.uid);
+        }
       } else {
         if (isRecurringModal && recurrenceWeeks > 1) {
           const seriesId = 'series_' + Date.now();
@@ -265,7 +271,14 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     e?.stopPropagation();
     if (!window.confirm('Opravdu chcete smazat tuto událost?')) return;
     try {
+      const evToDelete = events.find(e => e.id === id);
       await deleteCalendarEvent(id);
+      
+      // Pokud byla lekce součástí střídavé série, automaticky přepočítáme zbytek
+      if (evToDelete?.recurringSeriesId && currentUser) {
+        await rebalanceTutoringSeries(evToDelete.recurringSeriesId, currentUser.uid);
+      }
+
       if (isModalOpen && editingEvent?.id === id) {
         setIsModalOpen(false);
       }
