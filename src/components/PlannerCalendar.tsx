@@ -21,7 +21,8 @@ import {
   addWeeks, 
   subWeeks, 
   addDays, 
-  subDays
+  subDays,
+  getDay
 } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { 
@@ -37,12 +38,11 @@ import {
   X,
   CheckSquare,
   GraduationCap,
-  Building,
-  BookOpen,
   MapPin,
-  AlertCircle
+  AlertCircle,
+  AlertTriangle,
+  RotateCcw
 } from 'lucide-react';
-import { AiAssistantBar } from './AiAssistantBar';
 
 interface PlannerProps {
   events: CalendarEvent[];
@@ -71,13 +71,34 @@ const CATEGORIES: { key: EventCategory; label: string }[] = [
   { key: 'personal', label: 'Osobní' }
 ];
 
+const DAYS_OF_WEEK = [
+  { id: 1, label: 'Pondělí', short: 'Po' },
+  { id: 2, label: 'Úterý', short: 'Út' },
+  { id: 3, label: 'Středa', short: 'St' },
+  { id: 4, label: 'Čtvrtek', short: 'Čt' },
+  { id: 5, label: 'Pátek', short: 'Pá' },
+  { id: 6, label: 'Sobota', short: 'So' },
+  { id: 0, label: 'Neděle', short: 'Ne' }
+];
+
+// Barva studenta na barvu štítku
+const mapColorNameToKey = (c: string): string => {
+  const l = c.toLowerCase();
+  if (l.includes('červen') || l.includes('cerven') || l.includes('růž') || l.includes('rose')) return 'rose';
+  if (l.includes('modr') || l.includes('blue')) return 'blue';
+  if (l.includes('zelen') || l.includes('emerald') || l.includes('green')) return 'emerald';
+  if (l.includes('fialov') || l.includes('purple')) return 'purple';
+  if (l.includes('žlut') || l.includes('zlut') || l.includes('oranž') || l.includes('amber')) return 'amber';
+  return 'indigo';
+};
+
 export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, projects }) => {
   const { currentUser } = useAuth();
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const [viewMode, setViewMode] = useState<ViewMode>('month');
   const [showProjectTasks, setShowProjectTasks] = useState(true);
 
-  // Modal for new/edit event
+  // Modals
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
 
@@ -85,24 +106,83 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [eventDate, setEventDate] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [startTime, setStartTime] = useState('');
-  const [endTime, setEndTime] = useState('');
-  const [color, setColor] = useState('indigo');
+  const [startTime, setStartTime] = useState('16:30');
+  const [endTime, setEndTime] = useState('17:30');
+  const [color, setColor] = useState('rose');
   const [category, setCategory] = useState<EventCategory>('tutoring');
   const [saving, setSaving] = useState(false);
+  const [collisionWarning, setCollisionWarning] = useState<string | null>(null);
 
-  // Tutoring Specific State
-  const [studentColor, setStudentColor] = useState('modrá');
-  const [tutoringType, setTutoringType] = useState<TutoringType>('private');
+  // Tutoring Attributes
+  const [studentColor, setStudentColor] = useState('červená');
+  const [tutoringType, setTutoringType] = useState<TutoringType>('company');
   const [tutoringPlace, setTutoringPlace] = useState<TutoringPlace>('library');
-  const [subject, setSubject] = useState('M');
+  const [subject, setSubject] = useState('ČJ');
   const [customSubject, setCustomSubject] = useState('');
 
-  // Recurrence in manual modal
-  const [isRecurringModal, setIsRecurringModal] = useState(false);
-  const [recurrenceWeeks, setRecurrenceWeeks] = useState(8);
+  // Tutoring Schedule / Recurrence Options
+  const [isRecurring, setIsRecurring] = useState(true);
+  const [selectedDays, setSelectedDays] = useState<number[]>([2, 4]); // Výchozí Út a Čt
+  const [alternateSubjects, setAlternateSubjects] = useState(true); // Střídat ČJ a M
+  const [alternateOrder, setAlternateOrder] = useState<'CJ_M' | 'M_CJ'>('CJ_M');
+  const [untilPreset, setUntilPreset] = useState<'prijimacky' | 'skolni_rok' | 'custom' | 'weeks'>('prijimacky');
+  const [customUntilDate, setCustomUntilDate] = useState('2027-04-12');
+  const [customWeeks, setCustomWeeks] = useState(8);
 
-  // Handle tutoring place validation: soukromé doučování nemůže být v kanclu
+  // Reset form to defaults
+  const handleOpenNewModal = (defaultDate?: string) => {
+    setEditingEvent(null);
+    setTitle('Doučování ČJ (červená)');
+    setDescription('');
+    setEventDate(defaultDate || format(currentDate, 'yyyy-MM-dd'));
+    setStartTime('16:30');
+    setEndTime('17:30');
+    setColor('rose');
+    setCategory('tutoring');
+    setStudentColor('červená');
+    setTutoringType('company');
+    setTutoringPlace('library');
+    setSubject('ČJ');
+    setCustomSubject('');
+    setIsRecurring(true);
+    setSelectedDays([2, 4]);
+    setAlternateSubjects(true);
+    setAlternateOrder('CJ_M');
+    setUntilPreset('prijimacky');
+    setCustomUntilDate('2027-04-12');
+    setCollisionWarning(null);
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEditModal = (ev: CalendarEvent, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setEditingEvent(ev);
+    setTitle(ev.title);
+    setDescription(ev.description || '');
+    setEventDate(ev.date);
+    setStartTime(ev.startTime || '16:30');
+    setEndTime(ev.endTime || '17:30');
+    setColor(ev.color || 'rose');
+    setCategory(ev.category || 'event');
+    setIsRecurring(false); // Edit single
+    setCollisionWarning(null);
+
+    if (ev.tutoring) {
+      setStudentColor(ev.tutoring.studentColor || 'červená');
+      setTutoringType(ev.tutoring.type || 'company');
+      setTutoringPlace(ev.tutoring.place || 'library');
+      if (['M', 'ČJ'].includes(ev.tutoring.subject)) {
+        setSubject(ev.tutoring.subject);
+        setCustomSubject('');
+      } else {
+        setSubject('JINÉ');
+        setCustomSubject(ev.tutoring.subject);
+      }
+    }
+    setIsModalOpen(true);
+  };
+
+  // Rule: soukromé doučování nemůže být v kanclu
   const handleTypeChange = (newType: TutoringType) => {
     setTutoringType(newType);
     if (newType === 'private' && tutoringPlace === 'office') {
@@ -118,80 +198,64 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     setTutoringPlace(newPlace);
   };
 
-  // Navigation handlers
-  const handlePrev = () => {
-    if (viewMode === 'month') setCurrentDate(subMonths(currentDate, 1));
-    else if (viewMode === 'week') setCurrentDate(subWeeks(currentDate, 1));
-    else setCurrentDate(subDays(currentDate, 1));
-  };
-
-  const handleNext = () => {
-    if (viewMode === 'month') setCurrentDate(addMonths(currentDate, 1));
-    else if (viewMode === 'week') setCurrentDate(addWeeks(currentDate, 1));
-    else setCurrentDate(addDays(currentDate, 1));
-  };
-
-  const handleToday = () => {
-    setCurrentDate(new Date());
-  };
-
-  // Open modal for a specific date
-  const handleOpenNewModal = (defaultDate?: string) => {
-    setEditingEvent(null);
-    setTitle('Doučování M (modrá)');
-    setDescription('');
-    setEventDate(defaultDate || format(currentDate, 'yyyy-MM-dd'));
-    setStartTime('');
-    setEndTime('');
-    setColor('blue');
-    setCategory('tutoring');
-    setStudentColor('modrá');
-    setTutoringType('private');
-    setTutoringPlace('library');
-    setSubject('M');
-    setCustomSubject('');
-    setIsRecurringModal(false);
-    setRecurrenceWeeks(8);
-    setIsModalOpen(true);
-  };
-
-  const handleOpenEditModal = (ev: CalendarEvent, e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    setEditingEvent(ev);
-    setTitle(ev.title);
-    setDescription(ev.description || '');
-    setEventDate(ev.date);
-    setStartTime(ev.startTime || '');
-    setEndTime(ev.endTime || '');
-    setColor(ev.color || 'indigo');
-    setCategory(ev.category || 'event');
-
-    if (ev.tutoring) {
-      setStudentColor(ev.tutoring.studentColor || 'modrá');
-      setTutoringType(ev.tutoring.type || 'private');
-      setTutoringPlace(ev.tutoring.place || 'library');
-      if (['M', 'ČJ'].includes(ev.tutoring.subject)) {
-        setSubject(ev.tutoring.subject);
-        setCustomSubject('');
-      } else {
-        setSubject('JINÉ');
-        setCustomSubject(ev.tutoring.subject);
-      }
+  const toggleDay = (dayId: number) => {
+    if (selectedDays.includes(dayId)) {
+      if (selectedDays.length === 1) return; // Alespoň 1 den
+      setSelectedDays(selectedDays.filter(d => d !== dayId));
     } else {
-      setStudentColor('modrá');
-      setTutoringType('private');
-      setTutoringPlace('library');
-      setSubject('M');
-      setCustomSubject('');
+      setSelectedDays([...selectedDays, dayId].sort((a, b) => a - b));
     }
-    setIsModalOpen(true);
   };
 
+  // Vypočte cílové mezní datum
+  const getComputedUntilDate = (): Date => {
+    const curYear = new Date().getFullYear();
+    // Přijímačky: duben
+    const prijimackyYear = (new Date().getMonth() > 3) ? curYear + 1 : curYear;
+    
+    if (untilPreset === 'prijimacky') {
+      return new Date(prijimackyYear, 3, 12, 23, 59, 59); // 12. dubna
+    }
+    if (untilPreset === 'skolni_rok') {
+      const skolniRokYear = (new Date().getMonth() > 5) ? curYear + 1 : curYear;
+      return new Date(skolniRokYear, 5, 30, 23, 59, 59); // 30. června
+    }
+    if (untilPreset === 'custom') {
+      return new Date(customUntilDate + 'T23:59:59');
+    }
+    // weeks
+    return addWeeks(new Date(eventDate), customWeeks);
+  };
+
+  // Kontrola kolizí s jinými událostmi
+  const checkCollisions = (dates: string[], sTime?: string, eTime?: string): string[] => {
+    if (!sTime) return [];
+    const conflicts: string[] = [];
+    const toMinutes = (timeStr: string) => {
+      const [h, m] = timeStr.split(':').map(Number);
+      return h * 60 + m;
+    };
+    const newStart = toMinutes(sTime);
+    const newEnd = eTime ? toMinutes(eTime) : newStart + 60;
+
+    for (const d of dates) {
+      const dayEvents = events.filter(e => e.date === d && !!e.startTime && e.id !== editingEvent?.id);
+      for (const ev of dayEvents) {
+        const evStart = toMinutes(ev.startTime!);
+        const evEnd = ev.endTime ? toMinutes(ev.endTime) : evStart + 60;
+        if (Math.max(newStart, evStart) < Math.min(newEnd, evEnd)) {
+          conflicts.push(`${d} (${ev.title} v ${ev.startTime})`);
+        }
+      }
+    }
+    return conflicts;
+  };
+
+  // Save Event(s)
   const handleSaveEvent = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser || !title.trim() || !eventDate) return;
+    if (!currentUser || !title.trim()) return;
 
-    // Kontrola pravidla: soukromé nesmí být v kanclu
     if (category === 'tutoring' && tutoringType === 'private' && tutoringPlace === 'office') {
       alert('Pravidlo: Soukromá doučování nemohou být v kanclu!');
       return;
@@ -200,64 +264,140 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     setSaving(true);
     try {
       const finalSubject = subject === 'JINÉ' ? (customSubject.trim() || 'Jiné') : subject;
-      const tutoringPayload: TutoringDetails | undefined = category === 'tutoring' ? {
-        studentColor: studentColor.trim(),
-        type: tutoringType,
-        place: tutoringPlace,
-        subject: finalSubject
-      } : undefined;
+      const finalColor = category === 'tutoring' ? mapColorNameToKey(studentColor) : color;
 
+      // EDITACE JEDNÉ EXISTUJÍCÍ UDÁLOSTI
       if (editingEvent) {
+        const tutoringPayload: TutoringDetails | undefined = category === 'tutoring' ? {
+          studentColor: studentColor.trim(),
+          type: tutoringType,
+          place: tutoringPlace,
+          subject: finalSubject,
+          sequencePattern: editingEvent.tutoring?.sequencePattern,
+          sequenceIndex: editingEvent.tutoring?.sequenceIndex
+        } : undefined;
+
         await updateCalendarEvent(editingEvent.id, {
-          title: title.trim(),
+          title: category === 'tutoring' ? `Doučování ${finalSubject} (${studentColor.trim()})` : title.trim(),
           description: description.trim(),
           date: eventDate,
           startTime: startTime || undefined,
           endTime: endTime || undefined,
-          color,
+          color: finalColor,
           category,
           tutoring: tutoringPayload
         });
 
-        // Pokud šlo o doučování ze série se střídáním a uživatel ručně změnil předmět:
+        // Kaskádové přeorganizování navazujících lekcí, pokud šlo o sérii
         if (editingEvent.recurringSeriesId && editingEvent.tutoring?.sequencePattern) {
           await rebalanceTutoringSeries(editingEvent.recurringSeriesId, currentUser.uid);
         }
-      } else {
-        if (isRecurringModal && recurrenceWeeks > 1) {
-          const seriesId = 'series_' + Date.now();
-          const baseD = new Date(eventDate);
-          for (let i = 0; i < recurrenceWeeks; i++) {
-            const nextD = format(addWeeks(baseD, i), 'yyyy-MM-dd');
-            await createCalendarEvent({
-              userId: currentUser.uid,
-              title: title.trim(),
-              description: description.trim(),
-              date: nextD,
-              startTime: startTime || undefined,
-              endTime: endTime || undefined,
-              color,
-              category,
-              tutoring: tutoringPayload,
-              recurringSeriesId: seriesId,
-              isDone: false
-            });
+
+        setIsModalOpen(false);
+        return;
+      }
+
+      // VYTVOŘENÍ NOVÉHO DOUČOVÁNÍ (SÉRIE NEBO JEDNORÁZOVÉ)
+      if (category === 'tutoring' && isRecurring && selectedDays.length > 0) {
+        const untilDate = getComputedUntilDate();
+        const pattern = alternateSubjects 
+          ? (alternateOrder === 'CJ_M' ? ['ČJ', 'M'] : ['M', 'ČJ'])
+          : [finalSubject];
+
+        // Seřadíme vybrané dny chronologicky od data první lekce
+        const startDate = new Date(eventDate);
+        const dayDates = selectedDays.map(dayNum => {
+          const res = new Date(startDate);
+          res.setHours(0, 0, 0, 0);
+          const currentDay = getDay(res);
+          const daysToAdd = (dayNum - currentDay + 7) % 7;
+          return addDays(res, daysToAdd);
+        }).sort((a, b) => a.getTime() - b.getTime());
+
+        const occurrences: { date: string; subject: string }[] = [];
+        let patternIdx = 0;
+        let weekOffset = 0;
+        const maxWeeks = 40;
+
+        while (weekOffset < maxWeeks) {
+          for (const baseDay of dayDates) {
+            const curDate = addWeeks(baseDay, weekOffset);
+            if (curDate > untilDate) break;
+            const curDateStr = format(curDate, 'yyyy-MM-dd');
+            const subj = pattern[patternIdx % pattern.length];
+            occurrences.push({ date: curDateStr, subject: subj });
+            patternIdx++;
           }
-        } else {
+          if (addWeeks(dayDates[0], weekOffset + 1) > untilDate) break;
+          weekOffset++;
+        }
+
+        if (occurrences.length === 0) {
+          alert('V zadaném období do vybraného data nebyl nalezen žádný termín.');
+          setSaving(false);
+          return;
+        }
+
+        // Kontrola kolizí
+        const conflicts = checkCollisions(occurrences.map(o => o.date), startTime, endTime);
+        if (conflicts.length > 0) {
+          const proceed = window.confirm(
+            `Pozor, v některých termínech máte kolizi s jinou událostí:\n${conflicts.slice(0, 3).join('\n')}${conflicts.length > 3 ? '\na další...' : ''}\n\nChcete doučování přesto naplánovat?`
+          );
+          if (!proceed) {
+            setSaving(false);
+            return;
+          }
+        }
+
+        const seriesId = 'series_' + Date.now();
+        for (let i = 0; i < occurrences.length; i++) {
+          const occ = occurrences[i];
+          const cleanTitle = `Doučování ${occ.subject} (${studentColor.trim()})`;
           await createCalendarEvent({
             userId: currentUser.uid,
-            title: title.trim(),
+            title: cleanTitle,
             description: description.trim(),
-            date: eventDate,
+            date: occ.date,
             startTime: startTime || undefined,
             endTime: endTime || undefined,
-            color,
-            category,
-            tutoring: tutoringPayload,
+            color: finalColor,
+            category: 'tutoring',
+            tutoring: {
+              studentColor: studentColor.trim(),
+              type: tutoringType,
+              place: tutoringPlace,
+              subject: occ.subject,
+              sequencePattern: pattern,
+              sequenceIndex: i
+            },
+            recurringSeriesId: seriesId,
             isDone: false
           });
         }
+      } else {
+        // Jednorázová událost
+        const tutoringPayload: TutoringDetails | undefined = category === 'tutoring' ? {
+          studentColor: studentColor.trim(),
+          type: tutoringType,
+          place: tutoringPlace,
+          subject: finalSubject
+        } : undefined;
+
+        await createCalendarEvent({
+          userId: currentUser.uid,
+          title: category === 'tutoring' ? `Doučování ${finalSubject} (${studentColor.trim()})` : title.trim(),
+          description: description.trim(),
+          date: eventDate,
+          startTime: startTime || undefined,
+          endTime: endTime || undefined,
+          color: finalColor,
+          category,
+          tutoring: tutoringPayload,
+          isDone: false
+        });
       }
+
       setIsModalOpen(false);
     } catch (err) {
       console.error(err);
@@ -274,7 +414,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
       const evToDelete = events.find(e => e.id === id);
       await deleteCalendarEvent(id);
       
-      // Pokud byla lekce součástí střídavé série, automaticky přepočítáme zbytek
+      // Kaskádové přeorganizování zbylých lekcí v sérii
       if (evToDelete?.recurringSeriesId && currentUser) {
         await rebalanceTutoringSeries(evToDelete.recurringSeriesId, currentUser.uid);
       }
@@ -297,19 +437,34 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     }
   };
 
-  // Month days interval
+  // Navigations
+  const handlePrev = () => {
+    if (viewMode === 'month') setCurrentDate(subMonths(currentDate, 1));
+    else if (viewMode === 'week') setCurrentDate(subWeeks(currentDate, 1));
+    else setCurrentDate(subDays(currentDate, 1));
+  };
+
+  const handleNext = () => {
+    if (viewMode === 'month') setCurrentDate(addMonths(currentDate, 1));
+    else if (viewMode === 'week') setCurrentDate(addWeeks(currentDate, 1));
+    else setCurrentDate(addDays(currentDate, 1));
+  };
+
+  const handleToday = () => {
+    setCurrentDate(new Date());
+  };
+
+  // Calendar intervals
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(monthStart);
   const calendarStart = startOfWeek(monthStart, { weekStartsOn: 1 });
   const calendarEnd = endOfWeek(monthEnd, { weekStartsOn: 1 });
   const monthDays = useMemo(() => eachDayOfInterval({ start: calendarStart, end: calendarEnd }), [calendarStart, calendarEnd]);
 
-  // Week days interval
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
   const weekEnd = endOfWeek(currentDate, { weekStartsOn: 1 });
   const weekDays = useMemo(() => eachDayOfInterval({ start: weekStart, end: weekEnd }), [weekStart, weekEnd]);
 
-  // Map events and project tasks by date
   const eventsByDate = useMemo(() => {
     const map = new Map<string, CalendarEvent[]>();
     events.forEach((ev) => {
@@ -343,44 +498,32 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     return map;
   }, [projectTasks, projects, showProjectTasks]);
 
-  // Selected Day for Day View
   const selectedDayFormatted = format(currentDate, 'yyyy-MM-dd');
   const dayEvents = eventsByDate.get(selectedDayFormatted) || [];
   const dayTasks = tasksByDate.get(selectedDayFormatted) || [];
 
   return (
     <div className="max-w-7xl mx-auto w-full p-4 sm:p-6 space-y-6">
-      {/* AI Assistant Banner */}
-      <AiAssistantBar
-        events={events}
-        onEventCreated={(targetDateStr) => {
-          try {
-            setCurrentDate(new Date(targetDateStr));
-          } catch {}
-        }}
-      />
-
       {/* Top Banner & Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
         <div>
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
-              <CalendarIcon className="w-4 h-4" />
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center font-bold shadow-xs">
+              <GraduationCap className="w-5 h-5" />
             </div>
             <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">
-              Osobní kalendář & Plánovač doučování
+              Plánovač doučování & Osobní kalendář
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Plánuj si lekce doučování studentů, schůzky i osobní čas jednoduše a na jednom místě.
+            Plánuj lekce doučování pro studenty (i dvakrát týdně se střídáním ČJ a M), deadliny i osobní aktivity.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          {/* Toggle project tasks */}
           <button
             onClick={() => setShowProjectTasks(!showProjectTasks)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition cursor-pointer ${
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition cursor-pointer ${
               showProjectTasks 
                 ? 'bg-indigo-50 border-indigo-200 text-indigo-700' 
                 : 'bg-slate-50 border-slate-200 text-slate-500 hover:text-slate-700'
@@ -393,10 +536,10 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
 
           <button
             onClick={() => handleOpenNewModal()}
-            className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm transition cursor-pointer"
+            className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-md transition cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            <span>+ Přidat doučování / plán</span>
+            <span>+ Naplánovat doučování / událost</span>
           </button>
         </div>
       </div>
@@ -517,7 +660,6 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
 
                   {/* Events list */}
                   <div className="flex-1 space-y-1 overflow-hidden">
-                    {/* Project deadlines */}
                     {dayTasksList.slice(0, 2).map(({ task, project }) => (
                       <div
                         key={`ptask_${task.id}`}
@@ -530,9 +672,8 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                       </div>
                     ))}
 
-                    {/* Calendar & Tutoring events */}
                     {dayEvs.slice(0, 3 - Math.min(dayTasksList.length, 2)).map((ev) => {
-                      const colorCfg = COLOR_CLASSES[ev.color] || COLOR_CLASSES.indigo;
+                      const colorCfg = COLOR_CLASSES[ev.color] || COLOR_CLASSES.rose;
                       const isTutoring = ev.category === 'tutoring' || !!ev.tutoring;
 
                       return (
@@ -618,7 +759,6 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                   onClick={() => handleOpenNewModal(dateStr)}
                   className="p-2 space-y-2 hover:bg-slate-50/50 transition cursor-pointer flex flex-col"
                 >
-                  {/* Task Deadlines */}
                   {dayTasksList.map(({ task, project }) => (
                     <div
                       key={`w_task_${task.id}`}
@@ -632,9 +772,8 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                     </div>
                   ))}
 
-                  {/* Calendar & Tutoring Events */}
                   {dayEvs.map((ev) => {
-                    const colorCfg = COLOR_CLASSES[ev.color] || COLOR_CLASSES.indigo;
+                    const colorCfg = COLOR_CLASSES[ev.color] || COLOR_CLASSES.rose;
                     const tut = ev.tutoring;
 
                     return (
@@ -728,7 +867,6 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           </div>
 
           <div className="space-y-3">
-            {/* Project tasks */}
             {dayTasks.map(({ task, project }) => (
               <div
                 key={`day_task_${task.id}`}
@@ -752,9 +890,8 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
               </div>
             ))}
 
-            {/* Calendar Events & Tutoring */}
             {dayEvents.map((ev) => {
-              const colorCfg = COLOR_CLASSES[ev.color] || COLOR_CLASSES.indigo;
+              const colorCfg = COLOR_CLASSES[ev.color] || COLOR_CLASSES.rose;
               const tut = ev.tutoring;
 
               return (
@@ -866,16 +1003,16 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
         </div>
       )}
 
-      {/* CREATE / EDIT EVENT MODAL */}
+      {/* COMPREHENSIVE MODAL FOR TUTORING & EVENTS */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+          <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
               <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                 {category === 'tutoring' ? (
                   <>
                     <GraduationCap className="w-5 h-5 text-indigo-600" />
-                    {editingEvent ? 'Upravit doučování' : 'Nové doučování'}
+                    {editingEvent ? 'Upravit doučování' : 'Naplánovat doučování'}
                   </>
                 ) : (
                   <>
@@ -892,7 +1029,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
               </button>
             </div>
 
-            <form onSubmit={handleSaveEvent} className="p-6 space-y-4 overflow-y-auto flex-1">
+            <form onSubmit={handleSaveEvent} className="p-6 space-y-4 overflow-y-auto flex-1 text-slate-800">
               {/* Category Selector */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
@@ -900,14 +1037,8 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                 </label>
                 <select
                   value={category}
-                  onChange={(e) => {
-                    const newCat = e.target.value as EventCategory;
-                    setCategory(newCat);
-                    if (newCat === 'tutoring' && !title.includes('Doučování')) {
-                      setTitle(`Doučování ${subject} (${studentColor})`);
-                    }
-                  }}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 text-sm font-semibold text-slate-800"
+                  onChange={(e) => setCategory(e.target.value as EventCategory)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white font-semibold text-sm focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                 >
                   {CATEGORIES.map(cat => (
                     <option key={cat.key} value={cat.key}>{cat.label}</option>
@@ -915,12 +1046,17 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                 </select>
               </div>
 
-              {/* TUTORING SPECIFIC ATTRIBUTES */}
+              {/* TUTORING PARAMETERS */}
               {category === 'tutoring' && (
-                <div className="p-4 bg-indigo-50/70 border border-indigo-100 rounded-2xl space-y-3.5">
-                  <div className="flex items-center gap-1.5 text-xs font-extrabold text-indigo-900 uppercase tracking-wider">
-                    <GraduationCap className="w-4 h-4 text-indigo-600" />
-                    Povinné parametry doučování
+                <div className="p-4 bg-indigo-50/70 border border-indigo-100 rounded-2xl space-y-4">
+                  <div className="flex items-center justify-between border-b border-indigo-100/80 pb-2">
+                    <span className="text-xs font-extrabold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
+                      <GraduationCap className="w-4 h-4 text-indigo-600" />
+                      Parametry doučování
+                    </span>
+                    <span className="text-[11px] font-semibold text-indigo-600 bg-indigo-100/80 px-2 py-0.5 rounded-full">
+                      Pravidla aktivní
+                    </span>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -932,46 +1068,34 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                       <input
                         type="text"
                         required
-                        placeholder="např. modrá, červená, zelená"
+                        placeholder="červená, modrá, zelená..."
                         value={studentColor}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setStudentColor(val);
-                          setTitle(`Doučování ${subject === 'JINÉ' ? customSubject : subject} (${val})`);
-                        }}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                        onChange={(e) => setStudentColor(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
 
-                    {/* Předmět (M / ČJ / Jiný) */}
+                    {/* Předmět */}
                     <div>
                       <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                        Předmět *
+                        Výchozí předmět *
                       </label>
                       <div className="flex gap-1.5">
                         <select
                           value={subject}
-                          onChange={(e) => {
-                            const s = e.target.value;
-                            setSubject(s);
-                            setTitle(`Doučování ${s === 'JINÉ' ? customSubject : s} (${studentColor})`);
-                          }}
-                          className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold focus:outline-hidden focus:ring-2 focus:ring-indigo-500 flex-1"
+                          onChange={(e) => setSubject(e.target.value)}
+                          className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:outline-hidden focus:ring-2 focus:ring-indigo-500 flex-1"
                         >
-                          <option value="M">M (Matematika)</option>
                           <option value="ČJ">ČJ (Čeština)</option>
+                          <option value="M">M (Matematika)</option>
                           <option value="JINÉ">+ Jiný předmět...</option>
                         </select>
-
                         {subject === 'JINÉ' && (
                           <input
                             type="text"
                             placeholder="Např. AJ, FYZ..."
                             value={customSubject}
-                            onChange={(e) => {
-                              setCustomSubject(e.target.value);
-                              setTitle(`Doučování ${e.target.value || 'Předmět'} (${studentColor})`);
-                            }}
+                            onChange={(e) => setCustomSubject(e.target.value)}
                             className="w-24 px-2 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                           />
                         )}
@@ -979,8 +1103,8 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                     </div>
                   </div>
 
+                  {/* Typ & Místo */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {/* Typ: Soukromé / Firma */}
                     <div>
                       <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
                         Typ doučování *
@@ -988,42 +1112,35 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                       <div className="grid grid-cols-2 gap-1.5 bg-white p-1 rounded-xl border border-slate-200">
                         <button
                           type="button"
-                          onClick={() => handleTypeChange('private')}
-                          className={`py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
-                            tutoringType === 'private'
-                              ? 'bg-indigo-600 text-white shadow-xs'
-                              : 'text-slate-600 hover:text-slate-900'
-                          }`}
-                        >
-                          Soukromé
-                        </button>
-                        <button
-                          type="button"
                           onClick={() => handleTypeChange('company')}
                           className={`py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
-                            tutoringType === 'company'
-                              ? 'bg-indigo-600 text-white shadow-xs'
-                              : 'text-slate-600 hover:text-slate-900'
+                            tutoringType === 'company' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
                           }`}
                         >
                           Firma
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => handleTypeChange('private')}
+                          className={`py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
+                            tutoringType === 'private' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Soukromé
+                        </button>
                       </div>
                     </div>
 
-                    {/* Místo: Knihovna / Kancl */}
                     <div>
                       <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                        Místo *
+                        Místo konání *
                       </label>
                       <div className="grid grid-cols-2 gap-1.5 bg-white p-1 rounded-xl border border-slate-200">
                         <button
                           type="button"
                           onClick={() => handlePlaceChange('library')}
                           className={`py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
-                            tutoringPlace === 'library'
-                              ? 'bg-indigo-600 text-white shadow-xs'
-                              : 'text-slate-600 hover:text-slate-900'
+                            tutoringPlace === 'library' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
                           }`}
                         >
                           Knihovna
@@ -1053,132 +1170,255 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                       <span>Soukromá doučování nemohou probíhat v kanclu (je povolena pouze knihovna).</span>
                     </div>
                   )}
-                </div>
-              )}
 
-              {/* Title Input */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Název události / štítek *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Např. Doučování M (červená)..."
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 text-sm font-semibold"
-                />
-              </div>
+                  {/* RECURRING & ALTERNATING SETTINGS (Pouze pro nové doučování) */}
+                  {!editingEvent && (
+                    <div className="pt-2 border-t border-indigo-100 space-y-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={isRecurring}
+                          onChange={(e) => setIsRecurring(e.target.checked)}
+                          className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
+                        />
+                        <span className="text-xs font-bold text-slate-800">
+                          Pravidelné opakování (např. dvakrát týdně)
+                        </span>
+                      </label>
 
-              {/* Date & Recurrence */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Datum {isRecurringModal ? 'první lekce' : ''} *
-                </label>
-                <input
-                  type="date"
-                  required
-                  value={eventDate}
-                  onChange={(e) => setEventDate(e.target.value)}
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 text-sm font-medium"
-                />
-              </div>
+                      {isRecurring && (
+                        <div className="space-y-3 pl-6 animate-in fade-in duration-150">
+                          {/* Výběr dnů v týdnu */}
+                          <div>
+                            <span className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                              Vyberte dny v týdnu (např. Úterý a Čtvrtek):
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {DAYS_OF_WEEK.map((d) => {
+                                const isSel = selectedDays.includes(d.id);
+                                return (
+                                  <button
+                                    key={d.id}
+                                    type="button"
+                                    onClick={() => toggleDay(d.id)}
+                                    className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition cursor-pointer ${
+                                      isSel 
+                                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' 
+                                        : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                                    }`}
+                                  >
+                                    {d.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
 
-              {!editingEvent && (
-                <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={isRecurringModal}
-                      onChange={(e) => setIsRecurringModal(e.target.checked)}
-                      className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
-                    />
-                    <span className="text-xs font-bold text-slate-800">
-                      Opakovat pravidelně každý týden
-                    </span>
-                  </label>
+                          {/* Střídání ČJ a M */}
+                          <div className="p-3 bg-white rounded-xl border border-indigo-100 space-y-2">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={alternateSubjects}
+                                onChange={(e) => setAlternateSubjects(e.target.checked)}
+                                className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
+                              />
+                              <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                                <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
+                                Automaticky střídat předměty ČJ a M
+                              </span>
+                            </label>
 
-                  {isRecurringModal && (
-                    <div className="flex items-center gap-2 pt-1 pl-6">
-                      <span className="text-xs text-slate-600 font-medium">Počet týdnů:</span>
-                      <select
-                        value={recurrenceWeeks}
-                        onChange={(e) => setRecurrenceWeeks(parseInt(e.target.value, 10))}
-                        className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                      >
-                        <option value={4}>4 týdny (1 měsíc)</option>
-                        <option value={8}>8 týdnů (2 měsíce)</option>
-                        <option value={12}>12 týdnů (3 měsíce / čtvrtletí)</option>
-                        <option value={16}>16 týdnů (pololetí)</option>
-                        <option value={20}>20 týdnů</option>
-                      </select>
+                            {alternateSubjects && (
+                              <div className="flex items-center gap-2 pl-6 text-xs">
+                                <span className="text-slate-500">Pořadí střídání:</span>
+                                <select
+                                  value={alternateOrder}
+                                  onChange={(e) => setAlternateOrder(e.target.value as any)}
+                                  className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold focus:outline-hidden"
+                                >
+                                  <option value="CJ_M">1. hodina ČJ ➡️ 2. hodina M</option>
+                                  <option value="M_CJ">1. hodina M ➡️ 2. hodina ČJ</option>
+                                </select>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Trvání do (Předpřipravené volby) */}
+                          <div>
+                            <span className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                              Trvání doučování (konec série):
+                            </span>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setUntilPreset('prijimacky')}
+                                className={`p-2 rounded-xl border text-left text-xs transition cursor-pointer flex flex-col ${
+                                  untilPreset === 'prijimacky' 
+                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' 
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                                }`}
+                              >
+                                <span className="font-bold">🎯 Do přijímaček</span>
+                                <span className={`text-[10px] ${untilPreset === 'prijimacky' ? 'text-indigo-100' : 'text-slate-400'}`}>
+                                  12. a 13. dubna
+                                </span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setUntilPreset('skolni_rok')}
+                                className={`p-2 rounded-xl border text-left text-xs transition cursor-pointer flex flex-col ${
+                                  untilPreset === 'skolni_rok' 
+                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' 
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                                }`}
+                              >
+                                <span className="font-bold">🏫 Do konce školního roku</span>
+                                <span className={`text-[10px] ${untilPreset === 'skolni_rok' ? 'text-indigo-100' : 'text-slate-400'}`}>
+                                  30. června
+                                </span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setUntilPreset('weeks')}
+                                className={`p-2 rounded-xl border text-left text-xs transition cursor-pointer flex flex-col ${
+                                  untilPreset === 'weeks' 
+                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' 
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                                }`}
+                              >
+                                <span className="font-bold">📅 Počet týdnů</span>
+                                <span className={`text-[10px] ${untilPreset === 'weeks' ? 'text-indigo-100' : 'text-slate-400'}`}>
+                                  např. 8 týdnů (2 měsíce)
+                                </span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setUntilPreset('custom')}
+                                className={`p-2 rounded-xl border text-left text-xs transition cursor-pointer flex flex-col ${
+                                  untilPreset === 'custom' 
+                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' 
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                                }`}
+                              >
+                                <span className="font-bold">📆 Vlastní datum</span>
+                                <span className={`text-[10px] ${untilPreset === 'custom' ? 'text-indigo-100' : 'text-slate-400'}`}>
+                                  Konkrétní den v kalendáři
+                                </span>
+                              </button>
+                            </div>
+
+                            {untilPreset === 'custom' && (
+                              <div className="pt-2">
+                                <input
+                                  type="date"
+                                  value={customUntilDate}
+                                  onChange={(e) => setCustomUntilDate(e.target.value)}
+                                  className="w-full px-3 py-2 bg-white rounded-xl border border-slate-200 text-xs font-semibold focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                                />
+                              </div>
+                            )}
+
+                            {untilPreset === 'weeks' && (
+                              <div className="pt-2 flex items-center gap-2">
+                                <span className="text-xs text-slate-600">Počet týdnů:</span>
+                                <select
+                                  value={customWeeks}
+                                  onChange={(e) => setCustomWeeks(parseInt(e.target.value, 10))}
+                                  className="px-2.5 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-bold"
+                                >
+                                  <option value={4}>4 týdny (1 měsíc)</option>
+                                  <option value={8}>8 týdnů (2 měsíce)</option>
+                                  <option value={12}>12 týdnů (3 měsíce)</option>
+                                  <option value={16}>16 týdnů (pololetí)</option>
+                                  <option value={20}>20 týdnů</option>
+                                </select>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Times */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Čas a Datum zahájení */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Začátek
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    {category === 'tutoring' && isRecurring && !editingEvent ? 'Datum zahájení *' : 'Datum *'}
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={eventDate}
+                    onChange={(e) => setEventDate(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Čas od *
                   </label>
                   <input
                     type="time"
+                    required
                     value={startTime}
                     onChange={(e) => setStartTime(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 text-sm font-medium"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Konec
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Čas do *
                   </label>
                   <input
                     type="time"
+                    required
                     value={endTime}
                     onChange={(e) => setEndTime(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 text-sm font-medium"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
               </div>
 
-              {/* Color picker */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Barevný štítek
-                </label>
-                <div className="flex items-center gap-2 pt-1">
-                  {Object.keys(COLOR_CLASSES).map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setColor(c)}
-                      className={`w-7 h-7 rounded-full transition cursor-pointer ${COLOR_CLASSES[c].bg} ${
-                        color === c ? 'ring-2 ring-offset-2 ring-indigo-500 scale-110' : 'opacity-70 hover:opacity-100'
-                      }`}
-                    />
-                  ))}
+              {/* Název události (pokud není doučování) */}
+              {category !== 'tutoring' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Název události *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Např. Lékař, Porada, Zkouška..."
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                  />
                 </div>
-              </div>
+              )}
 
-              {/* Description */}
+              {/* Poznámka */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Poznámka / Látka k procvičení
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Poznámka / Látka k procvičení (volitelné)
                 </label>
                 <textarea
                   rows={2}
-                  placeholder="Probírané téma, domácí úkol, materiály..."
+                  placeholder="Detaily, pomůcky, domácí úkol..."
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 text-sm resize-none"
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs focus:outline-hidden focus:ring-2 focus:ring-indigo-500 resize-none"
                 />
               </div>
 
-              {/* Modal Buttons */}
-              <div className="flex items-center justify-between pt-2">
+              {/* Buttons */}
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100">
                 {editingEvent ? (
                   <button
                     type="button"
@@ -1186,7 +1426,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                     className="flex items-center gap-1.5 px-3 py-2 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-semibold transition cursor-pointer"
                   >
                     <Trash2 className="w-4 h-4" />
-                    Smazat
+                    Smazat lekci
                   </button>
                 ) : <div />}
 
@@ -1201,9 +1441,9 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                   <button
                     type="submit"
                     disabled={saving}
-                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow transition cursor-pointer disabled:opacity-50"
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-md transition cursor-pointer disabled:opacity-50"
                   >
-                    {saving ? 'Ukládám...' : editingEvent ? 'Uložit změny' : 'Uložit doučování'}
+                    {saving ? 'Ukládám...' : editingEvent ? 'Uložit změny' : 'Naplánovat doučování'}
                   </button>
                 </div>
               </div>
