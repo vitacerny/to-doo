@@ -469,41 +469,77 @@ export const deleteCalendarEvent = async (eventId: string) => {
 };
 
 /**
- * Přeuspořádá střídavé předměty (např. M, ČJ) v celé budoucí sérii doučování po změně nebo smazání lekce.
+ * Přeuspořádá střídavé předměty (např. M, ČJ) v celé budoucí sérii doučování po změně, smazání nebo přidání lekce.
+ * Pokud je zadáno seriesId, přeuspořádá danou sérii.
+ * Pokud seriesId není k dispozici, ale je zadán studentColor, najde a přeuspořádá všechny lekce daného studenta.
  */
-export const rebalanceTutoringSeries = async (seriesId: string, userId: string) => {
+export const rebalanceTutoringSeries = async (
+  seriesIdOrParam: string | { seriesId?: string; studentColor?: string },
+  userId: string
+) => {
   const allEvents = getLocalCalendarEvents(userId);
-  const seriesEvents = allEvents
-    .filter(e => e.recurringSeriesId === seriesId)
-    .sort((a, b) => {
-      const cmpDate = a.date.localeCompare(b.date);
-      if (cmpDate !== 0) return cmpDate;
-      return (a.startTime || '').localeCompare(b.startTime || '');
-    });
+  const seriesId = typeof seriesIdOrParam === 'string' ? seriesIdOrParam : seriesIdOrParam.seriesId;
+  const studentColor = typeof seriesIdOrParam === 'object' ? seriesIdOrParam.studentColor : undefined;
 
-  if (seriesEvents.length === 0) return;
+  let relevantEvents: CalendarEvent[] = [];
+  if (seriesId) {
+    relevantEvents = allEvents.filter(e => e.recurringSeriesId === seriesId || (studentColor && e.tutoring?.studentColor?.trim().toLowerCase() === studentColor.trim().toLowerCase()));
+  } else if (studentColor) {
+    relevantEvents = allEvents.filter(e => e.category === 'tutoring' && e.tutoring?.studentColor?.trim().toLowerCase() === studentColor.trim().toLowerCase());
+  }
 
-  // Najdeme vzor střídání (např. ["M", "ČJ"])
-  const pattern = seriesEvents[0]?.tutoring?.sequencePattern || ['M', 'ČJ'];
-  if (pattern.length < 2) return;
+  if (relevantEvents.length === 0) return;
 
-  // Projdeme sérii od začátku do konce a zajistíme striktní střídání
+  // Najdeme vzor střídání (např. ["M", "ČJ"]) z událostí, které mají sequencePattern definovaný
+  const evWithPattern = relevantEvents.find(e => e.tutoring?.sequencePattern && e.tutoring.sequencePattern.length >= 2);
+  const pattern = evWithPattern?.tutoring?.sequencePattern;
+  
+  // Pokud student nemá žádné nastavené střídání (např. má jen pevnou matematiku), není co přeuspořádávat
+  if (!pattern || pattern.length < 2) return;
+
+  const targetSeriesId = seriesId || evWithPattern?.recurringSeriesId;
+
+  // Seřadíme chronologicky
+  relevantEvents.sort((a, b) => {
+    const cmpDate = a.date.localeCompare(b.date);
+    if (cmpDate !== 0) return cmpDate;
+    return (a.startTime || '').localeCompare(b.startTime || '');
+  });
+
+  // Určíme výchozí předmět:
+  // Pokud existuje první lekce v sérii s daným indexem 0, nebo vezmeme předmět první lekce
+  // Zjistíme, jestli první lekce má specifický počátek
   let patternIdx = 0;
-  for (let i = 0; i < seriesEvents.length; i++) {
-    const ev = seriesEvents[i];
-    const expectedSubject = pattern[patternIdx % pattern.length];
-    const studentColor = ev.tutoring?.studentColor || 'modrá';
-    const newTitle = `Doučování ${expectedSubject} (${studentColor})`;
+  const firstEvent = relevantEvents[0];
+  if (firstEvent.tutoring?.subject) {
+    const startIdxInPattern = pattern.indexOf(firstEvent.tutoring.subject);
+    if (startIdxInPattern !== -1) {
+      patternIdx = startIdxInPattern;
+    }
+  }
 
-    if (ev.tutoring && (ev.tutoring.subject !== expectedSubject || ev.title !== newTitle)) {
+  // Projdeme události a zajistíme striktní střídání vzoru
+  for (let i = 0; i < relevantEvents.length; i++) {
+    const ev = relevantEvents[i];
+    const expectedSubject = pattern[patternIdx % pattern.length];
+    const colorName = ev.tutoring?.studentColor || studentColor || 'červená';
+    const newTitle = `Doučování ${expectedSubject} (${colorName})`;
+
+    const needsSubjectUpdate = ev.tutoring && ev.tutoring.subject !== expectedSubject;
+    const needsTitleUpdate = ev.title !== newTitle;
+    const needsSeriesId = targetSeriesId && ev.recurringSeriesId !== targetSeriesId;
+
+    if (needsSubjectUpdate || needsTitleUpdate || needsSeriesId) {
       const updatedTutoring = {
-        ...ev.tutoring,
+        ...ev.tutoring!,
+        studentColor: colorName,
         subject: expectedSubject,
         sequenceIndex: i,
         sequencePattern: pattern
       };
       await updateCalendarEvent(ev.id, {
         title: newTitle,
+        recurringSeriesId: ev.recurringSeriesId || targetSeriesId,
         tutoring: updatedTutoring
       });
     }

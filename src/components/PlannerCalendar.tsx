@@ -328,9 +328,14 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           tutoring: tutoringPayload
         });
 
-        // Kaskádové přeorganizování navazujících lekcí, pokud šlo o sérii
-        if (editingEvent.recurringSeriesId && editingEvent.tutoring?.sequencePattern) {
-          await rebalanceTutoringSeries(editingEvent.recurringSeriesId, currentUser.uid);
+        // Kaskádové přeorganizování navazujících lekcí, pokud šlo o doučování nebo sérii
+        if (currentUser) {
+          if (editingEvent.recurringSeriesId || category === 'tutoring') {
+            await rebalanceTutoringSeries({
+              seriesId: editingEvent.recurringSeriesId,
+              studentColor: studentColor.trim() || editingEvent.tutoring?.studentColor
+            }, currentUser.uid);
+          }
         }
 
         setIsModalOpen(false);
@@ -436,12 +441,30 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
         }
       } else {
         // Jednorázová událost
+        let matchedSeriesId: string | undefined = undefined;
+        let matchedPattern: string[] | undefined = undefined;
+
+        // Pokud jde o doučování, zkusíme najít existující sérii/vzor pro tohoto studenta
+        if (category === 'tutoring' && studentColor.trim()) {
+          const normColor = studentColor.trim().toLowerCase();
+          const existingSeriesEvent = events.find(e => 
+            e.category === 'tutoring' &&
+            e.tutoring?.studentColor?.trim().toLowerCase() === normColor &&
+            e.recurringSeriesId
+          );
+          if (existingSeriesEvent) {
+            matchedSeriesId = existingSeriesEvent.recurringSeriesId;
+            matchedPattern = existingSeriesEvent.tutoring?.sequencePattern;
+          }
+        }
+
         const tutoringPayload: TutoringDetails | undefined = category === 'tutoring' ? {
           studentColor: studentColor.trim(),
           type: tutoringType,
           place: tutoringPlace,
           goal: tutoringGoal,
-          subject: finalSubject
+          subject: finalSubject,
+          sequencePattern: matchedPattern
         } : undefined;
 
         await createCalendarEvent({
@@ -454,8 +477,17 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           color: finalColor,
           category,
           tutoring: tutoringPayload,
+          recurringSeriesId: matchedSeriesId,
           isDone: false
         });
+
+        // Pokud jsme přidali jednorázové doučování pro studenta se střídáním, přeorganizujeme celou sérii
+        if (category === 'tutoring' && studentColor.trim()) {
+          await rebalanceTutoringSeries({
+            seriesId: matchedSeriesId,
+            studentColor: studentColor.trim()
+          }, currentUser.uid);
+        }
       }
 
       setIsModalOpen(false);
@@ -474,9 +506,14 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
       const evToDelete = events.find(e => e.id === id);
       await deleteCalendarEvent(id);
       
-      // Kaskádové přeorganizování zbylých lekcí v sérii
-      if (evToDelete?.recurringSeriesId && currentUser) {
-        await rebalanceTutoringSeries(evToDelete.recurringSeriesId, currentUser.uid);
+      // Kaskádové přeorganizování zbylých lekcí v sérii / studenta
+      if (currentUser && evToDelete) {
+        if (evToDelete.recurringSeriesId || evToDelete.category === 'tutoring') {
+          await rebalanceTutoringSeries({
+            seriesId: evToDelete.recurringSeriesId,
+            studentColor: evToDelete.tutoring?.studentColor
+          }, currentUser.uid);
+        }
       }
 
       if (isModalOpen && editingEvent?.id === id) {
