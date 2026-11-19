@@ -114,17 +114,17 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const [collisionWarning, setCollisionWarning] = useState<string | null>(null);
 
   // Tutoring Attributes
-  const [studentColor, setStudentColor] = useState('červená');
+  const [studentColor, setStudentColor] = useState('');
   const [tutoringType, setTutoringType] = useState<TutoringType>('company');
   const [tutoringPlace, setTutoringPlace] = useState<TutoringPlace>('library');
-  const [subject, setSubject] = useState('ČJ');
+  const [subject, setSubject] = useState('M');
   const [customSubject, setCustomSubject] = useState('');
 
   // Tutoring Schedule / Recurrence Options
-  const [isRecurring, setIsRecurring] = useState(true);
-  const [selectedDays, setSelectedDays] = useState<number[]>([2, 4]); // Výchozí Út a Čt
-  const [alternateSubjects, setAlternateSubjects] = useState(true); // Střídat ČJ a M
-  const [alternateOrder, setAlternateOrder] = useState<'CJ_M' | 'M_CJ'>('CJ_M');
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [selectedDays, setSelectedDays] = useState<number[]>([]); // Výchozí žádný den
+  const [alternateSubjects, setAlternateSubjects] = useState(false); // Výchozí nevypnuto střídání
+  const [alternateOrder, setAlternateOrder] = useState<'M_CJ' | 'CJ_M'>('M_CJ');
   const [untilPreset, setUntilPreset] = useState<'prijimacky' | 'skolni_rok' | 'custom' | 'weeks'>('prijimacky');
   const [customUntilDate, setCustomUntilDate] = useState('2027-04-12');
   const [customWeeks, setCustomWeeks] = useState(8);
@@ -132,22 +132,22 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   // Reset form to defaults
   const handleOpenNewModal = (defaultDate?: string) => {
     setEditingEvent(null);
-    setTitle('Doučování ČJ (červená)');
+    setTitle('Doučování M');
     setDescription('');
     setEventDate(defaultDate || format(currentDate, 'yyyy-MM-dd'));
     setStartTime('16:30');
     setEndTime('17:30');
-    setColor('rose');
+    setColor('indigo');
     setCategory('tutoring');
-    setStudentColor('červená');
+    setStudentColor(''); // Žádný předem připravený student
     setTutoringType('company');
     setTutoringPlace('library');
-    setSubject('ČJ');
+    setSubject('M'); // Výchozí matematika
     setCustomSubject('');
-    setIsRecurring(true);
-    setSelectedDays([2, 4]);
-    setAlternateSubjects(true);
-    setAlternateOrder('CJ_M');
+    setIsRecurring(false); // Výchozí neopakovat, dokud si uživatel nezaškrtne
+    setSelectedDays([]); // Žádný předem vybraný den
+    setAlternateSubjects(false); // Výchozí nestřídat
+    setAlternateOrder('M_CJ');
     setUntilPreset('prijimacky');
     setCustomUntilDate('2027-04-12');
     setCollisionWarning(null);
@@ -200,7 +200,6 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
 
   const toggleDay = (dayId: number) => {
     if (selectedDays.includes(dayId)) {
-      if (selectedDays.length === 1) return; // Alespoň 1 den
       setSelectedDays(selectedDays.filter(d => d !== dayId));
     } else {
       setSelectedDays([...selectedDays, dayId].sort((a, b) => a - b));
@@ -298,7 +297,13 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
       }
 
       // VYTVOŘENÍ NOVÉHO DOUČOVÁNÍ (SÉRIE NEBO JEDNORÁZOVÉ)
-      if (category === 'tutoring' && isRecurring && selectedDays.length > 0) {
+      if (category === 'tutoring' && isRecurring) {
+        if (selectedDays.length === 0) {
+          alert('Při zapnutém opakování vyberte alespoň jeden den v týdnu.');
+          setSaving(false);
+          return;
+        }
+
         const untilDate = getComputedUntilDate();
         const pattern = alternateSubjects 
           ? (alternateOrder === 'CJ_M' ? ['ČJ', 'M'] : ['M', 'ČJ'])
