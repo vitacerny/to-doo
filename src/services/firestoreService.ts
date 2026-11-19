@@ -301,11 +301,79 @@ export const deleteChristmasGift = async (giftId: string) => {
 // ==========================================
 const getCalendarStorageKey = (userId: string) => `calendar_events_${userId}`;
 
+/**
+ * Zkontroluje a aktualizuje stavy hodin doučování:
+ * 1. Hodiny bez stavu dostanou stav 'unprepared'.
+ * 2. Pokud již nadešel čas konce hodiny:
+ *    - 'unprepared' nebo 'prepared' u firmy -> automaticky přepne na 'unrecorded' ("nezapsáno")
+ *    - 'unprepared' nebo 'prepared' u soukromého -> automaticky přepne na 'unpaid' ("nezaplaceno")
+ */
+export const syncTutoringStatuses = (events: CalendarEvent[]): { events: CalendarEvent[]; changed: boolean } => {
+  const now = new Date();
+  let changed = false;
+
+  const updatedEvents = events.map(ev => {
+    if (ev.category !== 'tutoring' || !ev.tutoring) return ev;
+
+    const tut = { ...ev.tutoring };
+    let evChanged = false;
+
+    // Pokud ještě nemá žádný stav, výchozí je 'unprepared'
+    if (!tut.status) {
+      tut.status = 'unprepared';
+      evChanged = true;
+    }
+
+    // Zkontrolujeme, zda již skončil čas hodiny
+    const [year, month, day] = ev.date.split('-').map(Number);
+    let endH = 23, endM = 59;
+    if (ev.endTime) {
+      const parts = ev.endTime.split(':').map(Number);
+      if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+        endH = parts[0];
+        endM = parts[1];
+      }
+    } else if (ev.startTime) {
+      const parts = ev.startTime.split(':').map(Number);
+      if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+        endH = parts[0] + 1; // výchozí 60 min
+        endM = parts[1];
+      }
+    }
+
+    const eventEndDate = new Date(year, month - 1, day, endH, endM, 0);
+
+    // Pokud už hodina skončila a je stále ve stavu před hodinou (unprepared / prepared)
+    if (now > eventEndDate && (tut.status === 'unprepared' || tut.status === 'prepared')) {
+      if (tut.type === 'company') {
+        tut.status = 'unrecorded';
+        evChanged = true;
+      } else {
+        tut.status = 'unpaid';
+        evChanged = true;
+      }
+    }
+
+    if (evChanged) {
+      changed = true;
+      return { ...ev, tutoring: tut };
+    }
+    return ev;
+  });
+
+  return { events: updatedEvents, changed };
+};
+
 const getLocalCalendarEvents = (userId: string): CalendarEvent[] => {
   try {
     const raw = localStorage.getItem(getCalendarStorageKey(userId));
     if (!raw) return [];
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    const { events: syncd, changed } = syncTutoringStatuses(parsed);
+    if (changed) {
+      saveLocalCalendarEvents(userId, syncd);
+    }
+    return syncd;
   } catch {
     return [];
   }
@@ -346,8 +414,9 @@ export const subscribeCalendarEvents = (userId: string, callback: (events: Calen
         remoteEvents.push({ id: doc.id, ...doc.data() } as CalendarEvent);
       });
       if (remoteEvents.length > 0) {
-        saveLocalCalendarEvents(userId, remoteEvents);
-        callback(remoteEvents);
+        const { events: syncd } = syncTutoringStatuses(remoteEvents);
+        saveLocalCalendarEvents(userId, syncd);
+        callback(syncd);
       }
     }, () => {
       callback(getLocalCalendarEvents(userId));

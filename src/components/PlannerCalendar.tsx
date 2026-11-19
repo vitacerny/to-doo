@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { CalendarEvent, EventCategory, Task, Project, TutoringDetails, TutoringType, TutoringPlace, TutoringGoal } from '../types';
+import { CalendarEvent, EventCategory, Task, Project, TutoringDetails, TutoringType, TutoringPlace, TutoringGoal, TutoringStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { 
   createCalendarEvent, 
@@ -93,6 +93,42 @@ const mapColorNameToKey = (c: string): string => {
   return 'indigo';
 };
 
+// Pomocné texty a barvy pro stavy doučování
+export const TUTORING_STATUS_CONFIG: Record<TutoringStatus, { label: string; badgeClass: string }> = {
+  unprepared: {
+    label: 'Nepřipraveno',
+    badgeClass: 'bg-rose-100 text-rose-700 border-rose-200'
+  },
+  prepared: {
+    label: 'Připraveno',
+    badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200'
+  },
+  unrecorded: {
+    label: 'Nezapsáno',
+    badgeClass: 'bg-amber-100 text-amber-800 border-amber-200'
+  },
+  recorded: {
+    label: 'Zapsáno',
+    badgeClass: 'bg-indigo-100 text-indigo-800 border-indigo-200'
+  },
+  late_excused_unrecorded: {
+    label: 'Omluveno pozdě – nezapsáno',
+    badgeClass: 'bg-purple-100 text-purple-800 border-purple-200'
+  },
+  late_excused_recorded: {
+    label: 'Omluveno pozdě – zapsáno',
+    badgeClass: 'bg-teal-100 text-teal-800 border-teal-200'
+  },
+  unpaid: {
+    label: 'Nezaplaceno',
+    badgeClass: 'bg-amber-100 text-amber-800 border-amber-200'
+  },
+  paid: {
+    label: 'Zaplaceno',
+    badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200'
+  }
+};
+
 export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, projects }) => {
   const { currentUser } = useAuth();
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
@@ -121,6 +157,9 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const [tutoringGoal, setTutoringGoal] = useState<TutoringGoal>('continuous'); // Přijímačkové vs Průběžné
   const [subject, setSubject] = useState('M');
   const [customSubject, setCustomSubject] = useState('');
+  const [tutoringStatus, setTutoringStatus] = useState<TutoringStatus>('unprepared');
+  const [preparedNote, setPreparedNote] = useState('');
+  const [targetPreparationNote, setTargetPreparationNote] = useState('');
 
   // Tutoring Schedule / Recurrence Options
   const [isRecurring, setIsRecurring] = useState(true);
@@ -165,6 +204,9 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     setTutoringGoal('continuous'); // Výchozí průběžné
     setSubject('M'); // Výchozí matematika
     setCustomSubject('');
+    setTutoringStatus('unprepared');
+    setPreparedNote('');
+    setTargetPreparationNote('');
     setIsRecurring(true); // Výchozí opakování zaškrtnuto
     setSelectedDays([]); // Žádný předem vybraný den
     setDayTimes({});
@@ -194,6 +236,9 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
       setTutoringType(ev.tutoring.type || 'company');
       setTutoringPlace(ev.tutoring.place || 'library');
       setTutoringGoal(ev.tutoring.goal || 'continuous');
+      setTutoringStatus(ev.tutoring.status || 'unprepared');
+      setPreparedNote(ev.tutoring.preparedNote || '');
+      setTargetPreparationNote(ev.tutoring.targetPreparationNote || '');
       if (['M', 'ČJ'].includes(ev.tutoring.subject)) {
         setSubject(ev.tutoring.subject);
         setCustomSubject('');
@@ -307,6 +352,15 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
 
       // EDITACE JEDNÉ EXISTUJÍCÍ UDÁLOSTI
       if (editingEvent) {
+        // Validace stavu: před přepnutím na 'prepared' musí být zadáno co je připraveno (min. 3 znaky)
+        if (category === 'tutoring' && tutoringStatus === 'prepared') {
+          if (!preparedNote.trim() || preparedNote.trim().length < 3) {
+            alert('Před přepnutím do stavu "Připraveno" musíte vyplnit, co máte na hodinu připraveno (minimálně 3 znaky).');
+            setSaving(false);
+            return;
+          }
+        }
+
         const tutoringPayload: TutoringDetails | undefined = category === 'tutoring' ? {
           studentColor: studentColor.trim(),
           type: tutoringType,
@@ -314,7 +368,10 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           goal: tutoringGoal,
           subject: finalSubject,
           sequencePattern: editingEvent.tutoring?.sequencePattern,
-          sequenceIndex: editingEvent.tutoring?.sequenceIndex
+          sequenceIndex: editingEvent.tutoring?.sequenceIndex,
+          status: tutoringStatus,
+          preparedNote: tutoringStatus === 'prepared' ? preparedNote.trim() : (preparedNote.trim() || undefined),
+          targetPreparationNote: targetPreparationNote.trim() || undefined
         } : undefined;
 
         await updateCalendarEvent(editingEvent.id, {
@@ -433,7 +490,9 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
               goal: tutoringGoal,
               subject: occ.subject,
               sequencePattern: pattern,
-              sequenceIndex: i
+              sequenceIndex: i,
+              status: 'unprepared',
+              targetPreparationNote: targetPreparationNote.trim() || undefined
             },
             recurringSeriesId: seriesId,
             isDone: false
@@ -464,7 +523,9 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           place: tutoringPlace,
           goal: tutoringGoal,
           subject: finalSubject,
-          sequencePattern: matchedPattern
+          sequencePattern: matchedPattern,
+          status: 'unprepared',
+          targetPreparationNote: targetPreparationNote.trim() || undefined
         } : undefined;
 
         await createCalendarEvent({
@@ -523,6 +584,41 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
       console.error(err);
       alert('Chyba při mazání.');
     }
+  };
+
+  // Rychlá změna stavu doučování přímo z kalendáře nebo detailu
+  const handleQuickStatusChange = async (ev: CalendarEvent, targetStatus: TutoringStatus, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!ev.tutoring) return;
+
+    // Pokud se přepíná na 'prepared', je potřeba zadat, co je připraveno (min. 3 znaky)
+    if (targetStatus === 'prepared') {
+      const currentNote = ev.tutoring.preparedNote || '';
+      const promptText = window.prompt(
+        'Co máte na hodinu připraveno? (povinné, min. 3 znaky):',
+        currentNote || ev.tutoring.targetPreparationNote || ''
+      );
+      if (promptText === null) return; // Uživatel zrušil prompt
+      if (promptText.trim().length < 3) {
+        alert('Stav nelze změnit na "Připraveno" bez vyplnění přípravy (minimálně 3 znaky).');
+        return;
+      }
+      await updateCalendarEvent(ev.id, {
+        tutoring: {
+          ...ev.tutoring,
+          status: 'prepared',
+          preparedNote: promptText.trim()
+        }
+      });
+      return;
+    }
+
+    await updateCalendarEvent(ev.id, {
+      tutoring: {
+        ...ev.tutoring,
+        status: targetStatus
+      }
+    });
   };
 
   const handleToggleDone = async (ev: CalendarEvent, e: React.MouseEvent) => {
@@ -772,38 +868,51 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                     {dayEvs.slice(0, 3 - Math.min(dayTasksList.length, 2)).map((ev) => {
                       const colorCfg = COLOR_CLASSES[ev.color] || COLOR_CLASSES.rose;
                       const isTutoring = ev.category === 'tutoring' || !!ev.tutoring;
+                      const tutStatus = ev.tutoring?.status || (isTutoring ? 'unprepared' : undefined);
+                      const statusCfg = tutStatus ? TUTORING_STATUS_CONFIG[tutStatus] : null;
 
                       return (
                         <div
                           key={ev.id}
                           onClick={(e) => handleOpenEditModal(ev, e)}
-                          className={`truncate text-[10px] sm:text-xs font-medium px-1.5 py-0.5 rounded border transition flex items-center gap-1 group/item ${
+                          className={`truncate text-[10px] sm:text-xs font-medium px-1.5 py-0.5 rounded border transition flex items-center justify-between gap-1 group/item ${
                             ev.isDone 
                               ? 'bg-slate-100 border-slate-200 text-slate-400 line-through' 
                               : `${colorCfg.lightBg} ${colorCfg.border} ${colorCfg.text}`
                           }`}
-                          title={`${ev.startTime ? ev.startTime + ' - ' : ''}${ev.title}${ev.tutoring ? ` [${ev.tutoring.subject}, ${ev.tutoring.place === 'library' ? 'Knihovna' : 'Kancl'}]` : ''}`}
+                          title={`${ev.startTime ? ev.startTime + ' - ' : ''}${ev.title}${ev.tutoring ? ` [${ev.tutoring.subject}, ${ev.tutoring.place === 'library' ? 'Knihovna' : 'Kancl'}, Stav: ${statusCfg?.label || 'Nepřipraveno'}]` : ''}`}
                         >
-                          <span
-                            onClick={(e) => handleToggleDone(ev, e)}
-                            className="cursor-pointer hover:opacity-75"
-                          >
-                            {ev.isDone ? (
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
-                            ) : isTutoring ? (
-                              <GraduationCap className="w-3 h-3 shrink-0" />
-                            ) : (
-                              <span className={`w-1.5 h-1.5 rounded-full ${colorCfg.dot} shrink-0 inline-block`} />
+                          <div className="flex items-center gap-1 truncate">
+                            <span
+                              onClick={(e) => handleToggleDone(ev, e)}
+                              className="cursor-pointer hover:opacity-75"
+                            >
+                              {ev.isDone ? (
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+                              ) : isTutoring ? (
+                                <GraduationCap className="w-3 h-3 shrink-0" />
+                              ) : (
+                                <span className={`w-1.5 h-1.5 rounded-full ${colorCfg.dot} shrink-0 inline-block`} />
+                              )}
+                            </span>
+                            {ev.startTime && (
+                              <span className="text-[9px] font-bold opacity-80 shrink-0">
+                                {ev.startTime}
+                              </span>
                             )}
-                          </span>
-                          {ev.startTime && (
-                            <span className="text-[9px] font-bold opacity-80 shrink-0">
-                              {ev.startTime}
+                            <span className="truncate">
+                              {ev.tutoring ? `${ev.tutoring.subject} • ${ev.tutoring.studentColor}` : ev.title}
+                            </span>
+                          </div>
+
+                          {statusCfg && (
+                            <span 
+                              className={`text-[8px] font-bold px-1 py-0.2 rounded border shrink-0 ${statusCfg.badgeClass}`}
+                              title={statusCfg.label}
+                            >
+                              {statusCfg.label.split(' ')[0]}
                             </span>
                           )}
-                          <span className="truncate">
-                            {ev.tutoring ? `${ev.tutoring.subject} • ${ev.tutoring.studentColor}` : ev.title}
-                          </span>
                         </div>
                       );
                     })}
@@ -908,10 +1017,17 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                         </div>
 
                         {tut ? (
-                          <div className="space-y-0.5">
-                            <div className="font-extrabold flex items-center gap-1">
-                              <GraduationCap className="w-3.5 h-3.5" />
-                              <span>{tut.subject} • {tut.studentColor}</span>
+                          <div className="space-y-1">
+                            <div className="font-extrabold flex items-center justify-between gap-1">
+                              <div className="flex items-center gap-1 truncate">
+                                <GraduationCap className="w-3.5 h-3.5 shrink-0" />
+                                <span>{tut.subject} • {tut.studentColor}</span>
+                              </div>
+                              {tut.status && (
+                                <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${TUTORING_STATUS_CONFIG[tut.status]?.badgeClass || ''}`}>
+                                  {TUTORING_STATUS_CONFIG[tut.status]?.label}
+                                </span>
+                              )}
                             </div>
                             <div className="flex flex-wrap gap-1 text-[10px] opacity-80 pt-0.5">
                               <span className="px-1 py-0.2 rounded bg-white/70 border border-slate-200">
@@ -921,6 +1037,18 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                                 {tut.place === 'library' ? 'Knihovna' : 'Kancl'}
                               </span>
                             </div>
+                            {tut.preparedNote && (
+                              <div className="text-[10px] text-emerald-800 bg-emerald-50/80 p-1 rounded border border-emerald-200/60 flex items-start gap-1">
+                                <span className="font-bold shrink-0">Příprava:</span>
+                                <span className="truncate">{tut.preparedNote}</span>
+                              </div>
+                            )}
+                            {tut.status === 'unprepared' && tut.targetPreparationNote && (
+                              <div className="text-[10px] text-slate-600 bg-slate-50/80 p-1 rounded border border-slate-200/60 flex items-start gap-1">
+                                <span className="font-bold shrink-0">K přípravě:</span>
+                                <span className="truncate">{tut.targetPreparationNote}</span>
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <div className="font-bold">{ev.title}</div>
@@ -1037,6 +1165,13 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                               <MapPin className="w-3 h-3 text-slate-400" />
                               {tut.place === 'library' ? 'Knihovna' : 'Kancl'}
                             </span>
+
+                            {/* Badge stavu s dropdownem / akcemi */}
+                            {tut.status && (
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${TUTORING_STATUS_CONFIG[tut.status]?.badgeClass || ''}`}>
+                                Stav: {TUTORING_STATUS_CONFIG[tut.status]?.label}
+                              </span>
+                            )}
                           </div>
                         ) : (
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${colorCfg.bg} text-white`}>
@@ -1049,6 +1184,82 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                         <p className="text-xs text-slate-600 max-w-xl leading-relaxed">
                           {ev.description}
                         </p>
+                      )}
+
+                      {/* Zobrazení přípravy na hodinu */}
+                      {tut && (
+                        <div className="pt-2 border-t border-slate-100 flex flex-col gap-1.5 text-xs">
+                          {tut.preparedNote ? (
+                            <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-200/80 text-emerald-900 flex items-start gap-2">
+                              <span className="font-bold shrink-0 text-emerald-800">✅ Co mám připraveno:</span>
+                              <span className="whitespace-pre-wrap">{tut.preparedNote}</span>
+                            </div>
+                          ) : (tut.status === 'unprepared' && tut.targetPreparationNote) ? (
+                            <div className="p-2 rounded-lg bg-slate-100 border border-slate-200 text-slate-700 flex items-start gap-2">
+                              <span className="font-bold shrink-0 text-slate-600">📝 Co si chci připravit:</span>
+                              <span className="whitespace-pre-wrap">{tut.targetPreparationNote}</span>
+                            </div>
+                          ) : null}
+
+                          {/* Tlačítka pro rychlou změnu stavu */}
+                          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-tight mr-1">Rychlá akce stavu:</span>
+                            {tut.status === 'unprepared' && (
+                              <button
+                                onClick={(e) => handleQuickStatusChange(ev, 'prepared', e)}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition cursor-pointer shadow-xs flex items-center gap-1"
+                              >
+                                <span>Označit jako "Připraveno"</span>
+                              </button>
+                            )}
+
+                            {tut.status === 'prepared' && (
+                              <button
+                                onClick={(e) => handleQuickStatusChange(ev, 'unprepared', e)}
+                                className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-lg text-xs transition cursor-pointer"
+                              >
+                                <span>Vrátit na "Nepřipraveno"</span>
+                              </button>
+                            )}
+
+                            {/* Firemní stavy po skončení */}
+                            {tut.type === 'company' && tut.status === 'unrecorded' && (
+                              <>
+                                <button
+                                  onClick={(e) => handleQuickStatusChange(ev, 'recorded', e)}
+                                  className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs transition cursor-pointer shadow-xs"
+                                >
+                                  Označit "Zapsáno"
+                                </button>
+                                <button
+                                  onClick={(e) => handleQuickStatusChange(ev, 'late_excused_unrecorded', e)}
+                                  className="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg text-xs transition cursor-pointer shadow-xs"
+                                >
+                                  Označit "Omluveno pozdě – nezapsáno"
+                                </button>
+                              </>
+                            )}
+
+                            {tut.type === 'company' && tut.status === 'late_excused_unrecorded' && (
+                              <button
+                                onClick={(e) => handleQuickStatusChange(ev, 'late_excused_recorded', e)}
+                                className="px-2.5 py-1 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-lg text-xs transition cursor-pointer shadow-xs"
+                              >
+                                Označit "Omluveno pozdě – zapsáno"
+                              </button>
+                            )}
+
+                            {/* Soukromé stavy po skončení */}
+                            {tut.type === 'private' && tut.status === 'unpaid' && (
+                              <button
+                                onClick={(e) => handleQuickStatusChange(ev, 'paid', e)}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition cursor-pointer shadow-xs"
+                              >
+                                Označit "Zaplaceno"
+                              </button>
+                            )}
+                          </div>
+                        </div>
                       )}
 
                       <div className="flex items-center gap-3 text-xs text-slate-500 pt-1">
@@ -1304,6 +1515,101 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                     <div className="flex items-center gap-1.5 text-[11px] text-amber-800 bg-amber-50 p-2 rounded-lg border border-amber-200/80">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
                       <span>Soukromá doučování nemohou probíhat v kanclu (je povolena pouze knihovna).</span>
+                    </div>
+                  )}
+
+                  {/* STAV HODINY A PŘÍPRAVA (při editaci existující lekce) */}
+                  {editingEvent && (
+                    <div className="p-3 bg-white rounded-2xl border border-indigo-200/80 space-y-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                          Aktuální stav hodiny *
+                        </label>
+                        <select
+                          value={tutoringStatus}
+                          onChange={(e) => {
+                            const newSt = e.target.value as TutoringStatus;
+                            setTutoringStatus(newSt);
+                          }}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="unprepared">Nepřipraveno</option>
+                          <option value="prepared">Připraveno</option>
+
+                          {tutoringType === 'company' ? (
+                            <>
+                              <option value="unrecorded">Nezapsáno (po hodině)</option>
+                              <option value="recorded">Zapsáno</option>
+                              <option value="late_excused_unrecorded">Omluveno pozdě – nezapsáno</option>
+                              {tutoringStatus === 'late_excused_recorded' && (
+                                <option value="late_excused_recorded">Omluveno pozdě – zapsáno</option>
+                              )}
+                              {tutoringStatus === 'late_excused_unrecorded' && (
+                                <option value="late_excused_recorded">Omluveno pozdě – zapsáno</option>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <option value="unpaid">Nezaplaceno (po hodině)</option>
+                              <option value="paid">Zaplaceno</option>
+                            </>
+                          )}
+                        </select>
+                      </div>
+
+                      {/* Pole pro "Připraveno" (povinné, min 3 znaky) */}
+                      {tutoringStatus === 'prepared' && (
+                        <div className="space-y-1 animate-in fade-in duration-150">
+                          <label className="block text-[11px] font-bold text-emerald-800 uppercase tracking-wider">
+                            Co mám připraveno na hodinu * (min. 3 znaky)
+                          </label>
+                          <textarea
+                            rows={2}
+                            required
+                            placeholder="Např. Pracovní list na lomené výrazy str. 12-14, test z minula..."
+                            value={preparedNote}
+                            onChange={(e) => setPreparedNote(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl border border-emerald-300 bg-emerald-50/40 text-xs font-medium focus:outline-hidden focus:ring-2 focus:ring-emerald-500 resize-none text-slate-900"
+                          />
+                          {preparedNote.trim().length > 0 && preparedNote.trim().length < 3 && (
+                            <span className="text-[10px] text-rose-600 font-semibold">
+                              Zadejte alespoň 3 znaky (aktuálně {preparedNote.trim().length}).
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Pole pro "Nepřipraveno" (volitelné: co si chci připravit) */}
+                      {tutoringStatus === 'unprepared' && (
+                        <div className="space-y-1">
+                          <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                            Co si chci připravit (volitelné)
+                          </label>
+                          <textarea
+                            rows={2}
+                            placeholder="Poznámka pro sebe, co nachystat před hodinou..."
+                            value={targetPreparationNote}
+                            onChange={(e) => setTargetPreparationNote(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium focus:outline-hidden focus:ring-2 focus:ring-indigo-500 resize-none text-slate-800"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* U nového doučování: volitelné Co si chci připravit */}
+                  {!editingEvent && (
+                    <div className="space-y-1">
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                        Co si chci připravit (volitelné, výchozí stav: Nepřipraveno)
+                      </label>
+                      <textarea
+                        rows={2}
+                        placeholder="Poznámka pro sebe, jaké materiály či témata připravit..."
+                        value={targetPreparationNote}
+                        onChange={(e) => setTargetPreparationNote(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium focus:outline-hidden focus:ring-2 focus:ring-indigo-500 resize-none text-slate-800"
+                      />
                     </div>
                   )}
 

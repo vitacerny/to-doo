@@ -66,6 +66,16 @@ export type TutoringType = 'private' | 'company'; // soukromé / firma
 export type TutoringPlace = 'library' | 'office'; // knihovna / kancl
 export type TutoringGoal = 'exam' | 'continuous'; // přijímačkové / průběžné
 
+export type TutoringStatus = 
+  | 'unprepared'                 // "nepřipraveno"
+  | 'prepared'                   // "připraveno"
+  | 'unrecorded'                 // "nezapsáno" (firma po skončení hodiny)
+  | 'recorded'                   // "zapsáno" (firma)
+  | 'late_excused_unrecorded'    // "omluveno pozdě - nezapsáno" (firma)
+  | 'late_excused_recorded'      // "omluveno pozdě - zapsáno" (firma)
+  | 'unpaid'                     // "nezaplaceno" (soukromé po skončení hodiny)
+  | 'paid';                      // "zaplaceno" (soukromé)
+
 export interface TutoringDetails {
   studentColor: string; // např. "modrá", "červená", "zelená"
   type: TutoringType;
@@ -74,6 +84,9 @@ export interface TutoringDetails {
   goal?: TutoringGoal; // přijímačkové / průběžné
   sequencePattern?: string[]; // např. ["M", "ČJ"] pro střídání
   sequenceIndex?: number; // pořadí v sérii (0, 1, 2...)
+  status?: TutoringStatus; // stav lekce (nepřipraveno, připraveno, ...)
+  preparedNote?: string; // co mám připraveno (povinné min. 3 znaky při přepnutí na 'prepared')
+  targetPreparationNote?: string; // co si chci připravit (volitelné u stavu 'unprepared')
 }
 
 export interface CalendarEvent {
