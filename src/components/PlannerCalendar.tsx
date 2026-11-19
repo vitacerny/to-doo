@@ -129,6 +129,36 @@ export const TUTORING_STATUS_CONFIG: Record<TutoringStatus, { label: string; bad
   }
 };
 
+/**
+ * Striktní povolené přechody stavů: lze přejít pouze o jeden krok dopředu.
+ */
+export const getNextAllowedTutoringStatuses = (currentStatus: TutoringStatus, type: TutoringType): TutoringStatus[] => {
+  switch (currentStatus) {
+    case 'unprepared':
+      // Z "nepřipraveno" lze přejít pouze na "připraveno"
+      return ['prepared'];
+    case 'prepared':
+      // Po skončení hodiny přechází na nezapsáno / nezaplaceno
+      return type === 'company' ? ['unrecorded'] : ['unpaid'];
+    case 'unrecorded':
+      // Z "nezapsáno" (firma) lze přejít na "zapsáno" nebo na "omluveno pozdě - nezapsáno"
+      return ['recorded', 'late_excused_unrecorded'];
+    case 'late_excused_unrecorded':
+      // Z "omluveno pozdě - nezapsáno" lze přejít na "omluveno pozdě - zapsáno"
+      return ['late_excused_recorded'];
+    case 'unpaid':
+      // Z "nezaplaceno" (soukromé) lze přejít na "zaplaceno"
+      return ['paid'];
+    case 'recorded':
+    case 'late_excused_recorded':
+    case 'paid':
+      // Finální stavy - nelze jít dále dopředu
+      return [];
+    default:
+      return [];
+  }
+};
+
 export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, projects }) => {
   const { currentUser } = useAuth();
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
@@ -352,6 +382,19 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
 
       // EDITACE JEDNÉ EXISTUJÍCÍ UDÁLOSTI
       if (editingEvent) {
+        // Kontrola povoleného přechodu stavu dopředu
+        if (category === 'tutoring' && editingEvent.tutoring) {
+          const originalStatus = editingEvent.tutoring.status || 'unprepared';
+          if (tutoringStatus !== originalStatus) {
+            const allowedNext = getNextAllowedTutoringStatuses(originalStatus, tutoringType);
+            if (!allowedNext.includes(tutoringStatus)) {
+              alert(`Nelze změnit stav z "${TUTORING_STATUS_CONFIG[originalStatus]?.label}" na "${TUTORING_STATUS_CONFIG[tutoringStatus]?.label}". Lze přejít pouze o jeden krok dopředu.`);
+              setSaving(false);
+              return;
+            }
+          }
+        }
+
         // Validace stavu: před přepnutím na 'prepared' musí být zadáno co je připraveno (min. 3 znaky)
         if (category === 'tutoring' && tutoringStatus === 'prepared') {
           if (!preparedNote.trim() || preparedNote.trim().length < 3) {
@@ -590,6 +633,13 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const handleQuickStatusChange = async (ev: CalendarEvent, targetStatus: TutoringStatus, e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (!ev.tutoring) return;
+
+    const currentSt = ev.tutoring.status || 'unprepared';
+    const allowedNext = getNextAllowedTutoringStatuses(currentSt, ev.tutoring.type);
+    if (!allowedNext.includes(targetStatus)) {
+      alert(`Nelze přejít ze stavu "${TUTORING_STATUS_CONFIG[currentSt]?.label}" do stavu "${TUTORING_STATUS_CONFIG[targetStatus]?.label}". Lze přejít pouze o jeden krok dopředu.`);
+      return;
+    }
 
     // Pokud se přepíná na 'prepared', je potřeba zadat, co je připraveno (min. 3 znaky)
     if (targetStatus === 'prepared') {
@@ -1519,83 +1569,88 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                   )}
 
                   {/* STAV HODINY A PŘÍPRAVA (při editaci existující lekce) */}
-                  {editingEvent && (
-                    <div className="p-3 bg-white rounded-2xl border border-indigo-200/80 space-y-3">
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                          Aktuální stav hodiny *
-                        </label>
-                        <select
-                          value={tutoringStatus}
-                          onChange={(e) => {
-                            const newSt = e.target.value as TutoringStatus;
-                            setTutoringStatus(newSt);
-                          }}
-                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                        >
-                          <option value="unprepared">Nepřipraveno</option>
-                          <option value="prepared">Připraveno</option>
+                  {editingEvent && (() => {
+                    const originalStatus = editingEvent.tutoring?.status || 'unprepared';
+                    const allowedNext = getNextAllowedTutoringStatuses(originalStatus, tutoringType);
+                    const selectableStatuses: TutoringStatus[] = [originalStatus, ...allowedNext];
 
-                          {tutoringType === 'company' ? (
-                            <>
-                              <option value="unrecorded">Nezapsáno (po hodině)</option>
-                              <option value="recorded">Zapsáno</option>
-                              <option value="late_excused_unrecorded">Omluveno pozdě – nezapsáno</option>
-                              {tutoringStatus === 'late_excused_recorded' && (
-                                <option value="late_excused_recorded">Omluveno pozdě – zapsáno</option>
-                              )}
-                              {tutoringStatus === 'late_excused_unrecorded' && (
-                                <option value="late_excused_recorded">Omluveno pozdě – zapsáno</option>
-                              )}
-                            </>
-                          ) : (
-                            <>
-                              <option value="unpaid">Nezaplaceno (po hodině)</option>
-                              <option value="paid">Zaplaceno</option>
-                            </>
-                          )}
-                        </select>
-                      </div>
-
-                      {/* Pole pro "Připraveno" (povinné, min 3 znaky) */}
-                      {tutoringStatus === 'prepared' && (
-                        <div className="space-y-1 animate-in fade-in duration-150">
-                          <label className="block text-[11px] font-bold text-emerald-800 uppercase tracking-wider">
-                            Co mám připraveno na hodinu * (min. 3 znaky)
-                          </label>
-                          <textarea
-                            rows={2}
-                            required
-                            placeholder="Např. Pracovní list na lomené výrazy str. 12-14, test z minula..."
-                            value={preparedNote}
-                            onChange={(e) => setPreparedNote(e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border border-emerald-300 bg-emerald-50/40 text-xs font-medium focus:outline-hidden focus:ring-2 focus:ring-emerald-500 resize-none text-slate-900"
-                          />
-                          {preparedNote.trim().length > 0 && preparedNote.trim().length < 3 && (
-                            <span className="text-[10px] text-rose-600 font-semibold">
-                              Zadejte alespoň 3 znaky (aktuálně {preparedNote.trim().length}).
+                    return (
+                      <div className="p-3 bg-white rounded-2xl border border-indigo-200/80 space-y-3">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                              Aktuální stav hodiny *
+                            </label>
+                            <span className="text-[10px] text-slate-400">
+                              (Lze přejít pouze o 1 krok dopředu)
                             </span>
+                          </div>
+                          
+                          {selectableStatuses.length <= 1 ? (
+                            <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 flex items-center justify-between">
+                              <span>{TUTORING_STATUS_CONFIG[originalStatus]?.label}</span>
+                              <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                                Finální stav
+                              </span>
+                            </div>
+                          ) : (
+                            <select
+                              value={tutoringStatus}
+                              onChange={(e) => {
+                                const newSt = e.target.value as TutoringStatus;
+                                setTutoringStatus(newSt);
+                              }}
+                              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                            >
+                              {selectableStatuses.map(st => (
+                                <option key={st} value={st}>
+                                  {st === originalStatus ? `${TUTORING_STATUS_CONFIG[st]?.label} (stávající)` : `➡️ Posunout na: ${TUTORING_STATUS_CONFIG[st]?.label}`}
+                                </option>
+                              ))}
+                            </select>
                           )}
                         </div>
-                      )}
 
-                      {/* Pole pro "Nepřipraveno" (volitelné: co si chci připravit) */}
-                      {tutoringStatus === 'unprepared' && (
-                        <div className="space-y-1">
-                          <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">
-                            Co si chci připravit (volitelné)
-                          </label>
-                          <textarea
-                            rows={2}
-                            placeholder="Poznámka pro sebe, co nachystat před hodinou..."
-                            value={targetPreparationNote}
-                            onChange={(e) => setTargetPreparationNote(e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium focus:outline-hidden focus:ring-2 focus:ring-indigo-500 resize-none text-slate-800"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
+                        {/* Pole pro "Připraveno" (povinné, min 3 znaky) */}
+                        {tutoringStatus === 'prepared' && (
+                          <div className="space-y-1 animate-in fade-in duration-150">
+                            <label className="block text-[11px] font-bold text-emerald-800 uppercase tracking-wider">
+                              Co mám připraveno na hodinu * (min. 3 znaky)
+                            </label>
+                            <textarea
+                              rows={2}
+                              required
+                              placeholder="Např. Pracovní list na lomené výrazy str. 12-14, test z minula..."
+                              value={preparedNote}
+                              onChange={(e) => setPreparedNote(e.target.value)}
+                              className="w-full px-3 py-2 rounded-xl border border-emerald-300 bg-emerald-50/40 text-xs font-medium focus:outline-hidden focus:ring-2 focus:ring-emerald-500 resize-none text-slate-900"
+                            />
+                            {preparedNote.trim().length > 0 && preparedNote.trim().length < 3 && (
+                              <span className="text-[10px] text-rose-600 font-semibold">
+                                Zadejte alespoň 3 znaky (aktuálně {preparedNote.trim().length}).
+                              </span>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Pole pro "Nepřipraveno" (volitelné: co si chci připravit) */}
+                        {tutoringStatus === 'unprepared' && (
+                          <div className="space-y-1">
+                            <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                              Co si chci připravit (volitelné)
+                            </label>
+                            <textarea
+                              rows={2}
+                              placeholder="Poznámka pro sebe, co nachystat před hodinou..."
+                              value={targetPreparationNote}
+                              onChange={(e) => setTargetPreparationNote(e.target.value)}
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium focus:outline-hidden focus:ring-2 focus:ring-indigo-500 resize-none text-slate-800"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* U nového doučování: volitelné Co si chci připravit */}
                   {!editingEvent && (
