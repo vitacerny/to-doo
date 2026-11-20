@@ -453,7 +453,36 @@ export const subscribeCalendarEvents = (userId: string, callback: (events: Calen
         remoteEvents.push({ id: doc.id, ...doc.data() } as CalendarEvent);
       });
       if (remoteEvents.length > 0) {
-        const { events: syncd } = syncTutoringStatuses(remoteEvents);
+        // Merge remote with local so any freshly edited local attributes aren't regressed by stale Firestore reads
+        const localList = getLocalCalendarEvents(userId);
+        const localMap = new Map(localList.map(e => [e.id, e]));
+
+        // Detect if there are duplicates for the same day and category
+        const merged: CalendarEvent[] = [];
+        const seenKeys = new Set<string>();
+
+        // We give priority to local modifications if the local timestamp or event matches
+        for (const rem of remoteEvents) {
+          const loc = localMap.get(rem.id);
+          const finalEv = loc ? { ...rem, ...loc } : rem;
+          
+          const uniqueKey = `${finalEv.date}_${finalEv.title}_${finalEv.category}`;
+          if (!seenKeys.has(uniqueKey)) {
+            seenKeys.add(uniqueKey);
+            merged.push(finalEv);
+          }
+        }
+
+        // Add any local events that are not yet in remote
+        for (const loc of localList) {
+          const uniqueKey = `${loc.date}_${loc.title}_${loc.category}`;
+          if (!seenKeys.has(uniqueKey) && !remoteEvents.some(r => r.id === loc.id)) {
+            seenKeys.add(uniqueKey);
+            merged.push(loc);
+          }
+        }
+
+        const { events: syncd } = syncTutoringStatuses(merged);
         saveLocalCalendarEvents(userId, syncd);
         callback(syncd);
       }
@@ -664,80 +693,9 @@ export const rebalanceTutoringSeries = async (
  * Zajistí přidání jednorázové středeční hodiny Matematiky pro studenta červená, pokud ještě v kalendáři chybí,
  * a správně zkalibruje střídání předmětů.
  */
-export const ensureWednesdayLessonForRedStudent = async (userId: string) => {
-  const allEvents = getLocalCalendarEvents(userId);
-  const redEvents = allEvents.filter(e => 
-    e.category === 'tutoring' && 
-    (e.tutoring?.studentColor?.trim().toLowerCase().includes('červen') || e.title.toLowerCase().includes('červen'))
-  );
-
-  if (redEvents.length === 0) return;
-
-  // Najdeme existující sérii studenta červená
-  const seriesEvent = redEvents.find(e => e.recurringSeriesId);
-  const seriesId = seriesEvent?.recurringSeriesId;
-  const pattern = seriesEvent?.tutoring?.sequencePattern || ['ČJ', 'M'];
-
-  // Seřadíme existující lekce chronologicky
-  redEvents.sort((a, b) => a.date.localeCompare(b.date));
-  const firstEventDate = redEvents[0].date; // např. Úterý první lekce
-
-  // Najdeme datum první středy po první lekci (nebo nejbližší středu v týdnu první lekce)
-  // Např. pokud je první lekce Út 2026-11-24, středa je 2026-11-25
-  const d = new Date(firstEventDate + 'T12:00:00');
-  const dayOfWeek = d.getDay(); // 0 ne, 1 po, 2 ut, 3 st...
-  let wedDateStr = '';
-  if (dayOfWeek <= 3) {
-    d.setDate(d.getDate() + (3 - dayOfWeek));
-    wedDateStr = d.toISOString().split('T')[0];
-  } else {
-    // Pokud první lekce byla po středě
-    d.setDate(d.getDate() + (3 - dayOfWeek + 7));
-    wedDateStr = d.toISOString().split('T')[0];
-  }
-
-  // Zkontrolujeme, zda už středa pro červeného studenta neexistuje
-  const exists = allEvents.some(e => 
-    e.date === wedDateStr && 
-    e.category === 'tutoring' && 
-    (e.tutoring?.studentColor?.trim().toLowerCase().includes('červen') || e.title.toLowerCase().includes('červen'))
-  );
-
-  if (!exists && wedDateStr) {
-    const sTime = seriesEvent?.startTime || '16:30';
-    const eTime = seriesEvent?.endTime || '17:30';
-    const place = seriesEvent?.tutoring?.place || 'library';
-    const goal = seriesEvent?.tutoring?.goal || 'exam';
-    const type = seriesEvent?.tutoring?.type || 'company';
-
-    await createCalendarEvent({
-      userId,
-      title: `Doučování M (červená)`,
-      description: 'Mimořádná hodina',
-      date: wedDateStr,
-      startTime: sTime,
-      endTime: eTime,
-      color: 'rose',
-      category: 'tutoring',
-      tutoring: {
-        studentColor: 'červená',
-        type,
-        place,
-        goal,
-        subject: 'M',
-        sequencePattern: pattern,
-        status: 'unprepared'
-      },
-      recurringSeriesId: seriesId,
-      isDone: false
-    });
-
-    // Přebalancujeme celou sérii, aby předměty perfektně seděly
-    await rebalanceTutoringSeries({
-      seriesId,
-      studentColor: 'červená'
-    }, userId);
-  }
+export const ensureWednesdayLessonForRedStudent = async (_userId: string) => {
+  // Deprecated: No-op to prevent creating or overriding Wednesday lessons with default 16:30
+  return;
 };
 
 /**
