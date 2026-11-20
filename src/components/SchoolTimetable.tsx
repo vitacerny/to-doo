@@ -164,20 +164,46 @@ export const SchoolTimetable: React.FC = () => {
   const [isLoadingSuplovani, setIsLoadingSuplovani] = useState<boolean>(false);
   const [showAllClassChanges, setShowAllClassChanges] = useState<boolean>(false);
 
-  const loadSuplovani = async () => {
-    setIsLoadingSuplovani(true);
+  const loadSuplovani = async (silent = false) => {
+    if (!silent) setIsLoadingSuplovani(true);
     try {
       const data = await fetchLiveSuplovani();
       setSubstitutionData(data);
     } catch (e) {
       console.error('Chyba při načítání suplování:', e);
     } finally {
-      setIsLoadingSuplovani(false);
+      if (!silent) setIsLoadingSuplovani(false);
     }
   };
 
   useEffect(() => {
+    // 1. Počáteční načtení
     loadSuplovani();
+
+    // 2. Pravidelný interval každých 10 minut na pozadí
+    const intervalId = setInterval(() => {
+      loadSuplovani(true);
+    }, 10 * 60 * 1000);
+
+    // 3. Automatické obnovení při návratu do záložky (visibilitychange)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadSuplovani(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // 4. Automatické obnovení při focusu okna
+    const handleWindowFocus = () => {
+      loadSuplovani(true);
+    };
+    window.addEventListener('focus', handleWindowFocus);
+
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleWindowFocus);
+    };
   }, []);
 
   const weekStart = startOfWeek(selectedDate, { weekStartsOn: 1 });
@@ -311,7 +337,7 @@ export const SchoolTimetable: React.FC = () => {
               {showAllClassChanges ? 'Zobrazit jen moje' : 'Všechny změny 8.A'}
             </button>
             <button
-              onClick={loadSuplovani}
+              onClick={() => loadSuplovani(false)}
               disabled={isLoadingSuplovani}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl transition cursor-pointer disabled:opacity-50"
             >
