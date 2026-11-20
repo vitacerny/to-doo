@@ -488,8 +488,8 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
         return;
       }
 
-      // VYTVOŘENÍ NOVÉHO DOUČOVÁNÍ (SÉRIE NEBO JEDNORÁZOVÉ)
-      if (category === 'tutoring' && isRecurring) {
+      // VYTVOŘENÍ OPAKUJÍCÍ SE AKCE (DOUČOVÁNÍ I BĚŽNÉ UDÁLOSTI)
+      if (isRecurring) {
         if (selectedDays.length === 0) {
           alert('Při zapnutém opakování vyberte alespoň jeden den v týdnu.');
           setSaving(false);
@@ -497,9 +497,11 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
         }
 
         const untilDate = getComputedUntilDate();
-        const pattern = alternateSubjects 
-          ? (alternateOrder === 'CJ_M' ? ['ČJ', 'M'] : ['M', 'ČJ'])
-          : [finalSubject];
+        const pattern = category === 'tutoring'
+          ? (alternateSubjects 
+              ? (alternateOrder === 'CJ_M' ? ['ČJ', 'M'] : ['M', 'ČJ'])
+              : [finalSubject])
+          : [];
 
         // Seřadíme vybrané dny chronologicky od data první lekce
         const startDate = new Date(eventDate);
@@ -511,7 +513,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           return addDays(res, daysToAdd);
         }).sort((a, b) => a.getTime() - b.getTime());
 
-        const occurrences: { date: string; subject: string; sTime?: string; eTime?: string }[] = [];
+        const occurrences: { date: string; subject?: string; sTime?: string; eTime?: string }[] = [];
         let patternIdx = 0;
         let weekOffset = 0;
         const maxWeeks = 40;
@@ -521,7 +523,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
             const curDate = addWeeks(baseDay, weekOffset);
             if (curDate > untilDate) break;
             const curDateStr = format(curDate, 'yyyy-MM-dd');
-            const subj = pattern[patternIdx % pattern.length];
+            const subj = pattern.length > 0 ? pattern[patternIdx % pattern.length] : undefined;
             const dayNum = getDay(curDate);
             const customT = dayTimes[dayNum] || { startTime, endTime };
             occurrences.push({ 
@@ -551,7 +553,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
 
         if (conflicts.length > 0) {
           const proceed = window.confirm(
-            `Pozor, v některých termínech máte kolizi s jinou událostí:\n${conflicts.slice(0, 3).join('\n')}${conflicts.length > 3 ? '\na další...' : ''}\n\nChcete doučování přesto naplánovat?`
+            `Pozor, v některých termínech máte kolizi s jinou událostí:\n${conflicts.slice(0, 3).join('\n')}${conflicts.length > 3 ? '\na další...' : ''}\n\nChcete opakující se událost přesto naplánovat?`
           );
           if (!proceed) {
             setSaving(false);
@@ -562,7 +564,22 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
         const seriesId = 'series_' + Date.now();
         for (let i = 0; i < occurrences.length; i++) {
           const occ = occurrences[i];
-          const cleanTitle = `Doučování ${occ.subject} (${studentColor.trim()})`;
+          const cleanTitle = category === 'tutoring'
+            ? `Doučování ${occ.subject} (${studentColor.trim()})`
+            : title.trim();
+
+          const tutoringPayload: TutoringDetails | undefined = category === 'tutoring' ? {
+            studentColor: studentColor.trim(),
+            type: tutoringType,
+            place: tutoringPlace,
+            goal: tutoringGoal,
+            subject: occ.subject || finalSubject,
+            sequencePattern: pattern,
+            sequenceIndex: i,
+            status: 'unprepared',
+            targetPreparationNote: targetPreparationNote.trim() || undefined
+          } : undefined;
+
           await createCalendarEvent({
             userId: currentUser.uid,
             title: cleanTitle,
@@ -571,18 +588,8 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
             startTime: occ.sTime || undefined,
             endTime: occ.eTime || undefined,
             color: finalColor,
-            category: 'tutoring',
-            tutoring: {
-              studentColor: studentColor.trim(),
-              type: tutoringType,
-              place: tutoringPlace,
-              goal: tutoringGoal,
-              subject: occ.subject,
-              sequencePattern: pattern,
-              sequenceIndex: i,
-              status: 'unprepared',
-              targetPreparationNote: targetPreparationNote.trim() || undefined
-            },
+            category,
+            tutoring: tutoringPayload,
             recurringSeriesId: seriesId,
             isDone: false
           });
@@ -2969,7 +2976,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    {category === 'tutoring' && isRecurring && !editingEvent ? 'Datum zahájení *' : 'Datum *'}
+                    {isRecurring && !editingEvent ? 'Datum zahájení *' : 'Datum *'}
                   </label>
                   <input
                     type="date"
@@ -3014,11 +3021,174 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                   <input
                     type="text"
                     required
-                    placeholder="Např. Lékař, Porada, Zkouška..."
+                    placeholder="Např. Kroužek, Trénink, Lékař, Porada..."
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   />
+                </div>
+              )}
+
+              {/* OPAKOVÁNÍ PRO BĚŽNÉ UDÁLOSTI (pokud není doučování) */}
+              {category !== 'tutoring' && !editingEvent && (
+                <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isRecurring}
+                      onChange={(e) => setIsRecurring(e.target.checked)}
+                      className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
+                    />
+                    <span className="text-xs font-bold text-slate-800">
+                      Opakovat každý týden (např. pravidelný trénink, kroužek)
+                    </span>
+                  </label>
+
+                  {isRecurring && (
+                    <div className="space-y-3 pl-6 animate-in fade-in duration-150">
+                      <div>
+                        <span className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                          Vyberte dny v týdnu pro opakování:
+                        </span>
+                        <div className="flex flex-wrap gap-1.5 mb-2.5">
+                          {DAYS_OF_WEEK.map((d) => {
+                            const isSel = selectedDays.includes(d.id);
+                            return (
+                              <button
+                                key={d.id}
+                                type="button"
+                                onClick={() => toggleDay(d.id)}
+                                className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition cursor-pointer ${
+                                  isSel 
+                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' 
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                                }`}
+                              >
+                                {d.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {selectedDays.length > 0 && (
+                          <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-2">
+                            <span className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                              Čas pro jednotlivé dny:
+                            </span>
+                            <div className="space-y-1.5">
+                              {selectedDays.map(dayId => {
+                                const dayObj = DAYS_OF_WEEK.find(d => d.id === dayId);
+                                const currentT = dayTimes[dayId] || { startTime: startTime || '16:30', endTime: endTime || '17:30' };
+                                return (
+                                  <div key={dayId} className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-slate-50 border border-slate-200/70 text-xs">
+                                    <span className="font-bold text-slate-800 w-20 shrink-0">
+                                      {dayObj?.label}:
+                                    </span>
+                                    <div className="flex items-center gap-1.5">
+                                      <input
+                                        type="time"
+                                        value={currentT.startTime}
+                                        onChange={(e) => updateDayTime(dayId, 'startTime', e.target.value)}
+                                        className="px-2 py-1 bg-white border border-slate-200 rounded-md font-semibold text-slate-800 focus:outline-hidden"
+                                      />
+                                      <span className="text-slate-400">–</span>
+                                      <input
+                                        type="time"
+                                        value={currentT.endTime}
+                                        onChange={(e) => updateDayTime(dayId, 'endTime', e.target.value)}
+                                        className="px-2 py-1 bg-white border border-slate-200 rounded-md font-semibold text-slate-800 focus:outline-hidden"
+                                      />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Trvání série do */}
+                      <div>
+                        <span className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                          Opakovat do:
+                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setUntilPreset('skolni_rok')}
+                            className={`p-2 rounded-xl border text-left text-xs transition cursor-pointer flex flex-col ${
+                              untilPreset === 'skolni_rok' 
+                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' 
+                                : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                            }`}
+                          >
+                            <span className="font-bold">🏫 Konec pololetí/roku</span>
+                            <span className={`text-[10px] ${untilPreset === 'skolni_rok' ? 'text-indigo-100' : 'text-slate-400'}`}>
+                              do 30. června
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setUntilPreset('weeks')}
+                            className={`p-2 rounded-xl border text-left text-xs transition cursor-pointer flex flex-col ${
+                              untilPreset === 'weeks' 
+                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' 
+                                : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                            }`}
+                          >
+                            <span className="font-bold">📅 Počet týdnů</span>
+                            <span className={`text-[10px] ${untilPreset === 'weeks' ? 'text-indigo-100' : 'text-slate-400'}`}>
+                              např. 8 týdnů
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setUntilPreset('custom')}
+                            className={`p-2 rounded-xl border text-left text-xs transition cursor-pointer flex flex-col ${
+                              untilPreset === 'custom' 
+                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' 
+                                : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                            }`}
+                          >
+                            <span className="font-bold">📆 Vlastní datum</span>
+                            <span className={`text-[10px] ${untilPreset === 'custom' ? 'text-indigo-100' : 'text-slate-400'}`}>
+                              Konkrétní den
+                            </span>
+                          </button>
+                        </div>
+
+                        {untilPreset === 'custom' && (
+                          <div className="pt-2">
+                            <input
+                              type="date"
+                              value={customUntilDate}
+                              onChange={(e) => setCustomUntilDate(e.target.value)}
+                              className="w-full px-3 py-2 bg-white rounded-xl border border-slate-200 text-xs font-semibold focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                            />
+                          </div>
+                        )}
+
+                        {untilPreset === 'weeks' && (
+                          <div className="pt-2 flex items-center gap-2">
+                            <span className="text-xs text-slate-600">Počet týdnů:</span>
+                            <select
+                              value={customWeeks}
+                              onChange={(e) => setCustomWeeks(parseInt(e.target.value, 10))}
+                              className="px-2.5 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-bold"
+                            >
+                              <option value={4}>4 týdny (1 měsíc)</option>
+                              <option value={8}>8 týdnů (2 měsíce)</option>
+                              <option value={12}>12 týdnů (3 měsíce)</option>
+                              <option value={16}>16 týdnů</option>
+                              <option value={20}>20 týdnů</option>
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
