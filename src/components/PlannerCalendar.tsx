@@ -46,8 +46,10 @@ import {
   MapPin,
   AlertCircle,
   AlertTriangle,
-  RotateCcw
+  RotateCcw,
+  BookOpen
 } from 'lucide-react';
+import { SchoolTimetable } from './SchoolTimetable';
 
 interface PlannerProps {
   events: CalendarEvent[];
@@ -165,6 +167,9 @@ export const getNextAllowedTutoringStatuses = (currentStatus: TutoringStatus, ty
 
 export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, projects }) => {
   const { currentUser } = useAuth();
+  // Podzáložky v sekci Kalendář: 'school' (1. škola) a 'planner' (2. osobní plánovač & doučování)
+  const [plannerSubTab, setPlannerSubTab] = useState<'school' | 'planner'>('school');
+
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const [viewMode, setViewMode] = useState<ViewMode>('month');
   const [showProjectTasks, setShowProjectTasks] = useState(true);
@@ -943,7 +948,48 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const dayTasks = tasksByDate.get(selectedDayFormatted) || [];
 
   return (
-    <div className="max-w-7xl mx-auto w-full p-4 sm:p-6 space-y-6">
+    <div className="w-full flex-1 flex flex-col">
+      {/* Podzáložky v záložce Kalendář & Plánovač: 1. Škola, 2. Plánovač & Doučování */}
+      <div className="bg-white border-b border-slate-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex items-center justify-between">
+          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setPlannerSubTab('school')}
+              className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
+                plannerSubTab === 'school'
+                  ? 'bg-white text-indigo-700 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
+              <span>1. Škola (Rozvrh)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setPlannerSubTab('planner')}
+              className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
+                plannerSubTab === 'planner'
+                  ? 'bg-white text-indigo-700 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <CalendarIcon className="w-3.5 h-3.5 text-indigo-600" />
+              <span>2. Plánovač & Doučování</span>
+            </button>
+          </div>
+
+          <div className="hidden sm:block text-xs font-semibold text-slate-400">
+            {plannerSubTab === 'school' ? 'Třída 8.A • Bakaláři' : 'Kalendář aktivit a doučování'}
+          </div>
+        </div>
+      </div>
+
+      {plannerSubTab === 'school' ? (
+        <SchoolTimetable />
+      ) : (
+        <div className="max-w-7xl mx-auto w-full p-4 sm:p-6 space-y-6">
       {/* Top Banner & Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
         <div>
@@ -2617,6 +2663,8 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
               </div>
             </form>
           </div>
+        </div>
+      )}
         </div>
       )}
     </div>
