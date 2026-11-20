@@ -706,10 +706,14 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
 
     // Maximální možný konec podle typu doučování:
     // soukromé: 18:00 (knihovna zavírá), firemní: 19:00
-    const hardEndMinute = tutType === 'private' ? 18 * 60 : 19 * 60;
+    const defaultHardEndMinute = tutType === 'private' ? 18 * 60 : 19 * 60;
 
     for (const d of allDays) {
       const dStr = format(d, 'yyyy-MM-dd');
+      const dayOfWeek = getDay(d); // 0 = Ne, 1 = Po, ..., 6 = So
+
+      // Pravidlo: V neděli se nedoučuje
+      if (dayOfWeek === 0) continue;
 
       // Podmínka: Daný student ten den ještě ŽÁDNOU hodinu nemá
       const studentHasLessonThisDay = events.some(e => 
@@ -719,19 +723,29 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
       );
       if (studentHasLessonThisDay) continue;
 
-      // Zjistíme, kdy končí vyučování
-      const schoolEnd = getSchoolDayEndDetails(d);
-      let dayEarliestStartMin = 14 * 60; // výchozí 14:00
+      let dayEarliestStartMin: number;
+      let hardEndMinute: number;
 
-      if (schoolEnd) {
-        if (schoolEnd.endTime >= '16:10') {
-          dayEarliestStartMin = 16 * 60 + 30; // 16:30
-        } else if (schoolEnd.endTime >= '15:20') {
-          dayEarliestStartMin = 15 * 60 + 30; // 15:30
-        } else if (schoolEnd.endTime >= '14:30') {
-          dayEarliestStartMin = 14 * 60 + 45; // 14:45
-        } else {
-          dayEarliestStartMin = 14 * 60; // 14:00
+      // Pravidlo: V sobotu je jediný možný blok 8:00 - 10:00
+      if (dayOfWeek === 6) {
+        dayEarliestStartMin = 8 * 60; // 08:00
+        hardEndMinute = 10 * 60;      // 10:00
+      } else {
+        // Všední dny: začátek podle konce vyučování
+        const schoolEnd = getSchoolDayEndDetails(d);
+        dayEarliestStartMin = 14 * 60; // výchozí 14:00
+        hardEndMinute = defaultHardEndMinute;
+
+        if (schoolEnd) {
+          if (schoolEnd.endTime >= '16:10') {
+            dayEarliestStartMin = 16 * 60 + 30; // 16:30
+          } else if (schoolEnd.endTime >= '15:20') {
+            dayEarliestStartMin = 15 * 60 + 30; // 15:30
+          } else if (schoolEnd.endTime >= '14:30') {
+            dayEarliestStartMin = 14 * 60 + 45; // 14:45
+          } else {
+            dayEarliestStartMin = 14 * 60; // 14:00
+          }
         }
       }
 
