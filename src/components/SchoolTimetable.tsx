@@ -16,8 +16,25 @@ import {
   CheckCircle2,
   ExternalLink,
   ShieldCheck,
-  Ban
+  Ban,
+  FileText,
+  HelpCircle,
+  BookOpen,
+  Plus,
+  Trash2,
+  Check
 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { 
+  SchoolLessonEvent, 
+  SchoolEventItemType 
+} from '../types';
+import { 
+  subscribeSchoolEvents, 
+  createSchoolEvent, 
+  updateSchoolEvent, 
+  deleteSchoolEvent 
+} from '../services/firestoreService';
 import { 
   fetchLiveSuplovani, 
   DailySubstitutionResult, 
@@ -140,6 +157,9 @@ export const getISOWeekNumber = (date: Date): number => {
 };
 
 export const SchoolTimetable: React.FC = () => {
+  const { currentUser } = useAuth();
+  const userId = currentUser?.uid || 'guest';
+
   // Výchozí týden: Příští týden od 23. 11. 2026 (dle požadavku uživatele)
   const [selectedDate, setSelectedDate] = useState<Date>(() => {
     const today = new Date();
@@ -155,9 +175,26 @@ export const SchoolTimetable: React.FC = () => {
     lesson: TimetableLesson;
     period: LessonPeriod;
     dayName: string;
+    date: Date;
     dateStr: string;
+    isoDate: string; // YYYY-MM-DD
     substitution?: SchoolSubstitutionChange;
   } | null>(null);
+
+  // Školní události (písemky, zkoušení, DÚ)
+  const [schoolEvents, setSchoolEvents] = useState<SchoolLessonEvent[]>([]);
+  // Formulář pro přidání nové události
+  const [showAddEventForm, setShowAddEventForm] = useState<boolean>(false);
+  const [newEventTitle, setNewEventTitle] = useState<string>('');
+  const [newEventType, setNewEventType] = useState<SchoolEventItemType>('exam');
+  const [newEventNote, setNewEventNote] = useState<string>('');
+
+  useEffect(() => {
+    const unsubscribe = subscribeSchoolEvents(userId, (events) => {
+      setSchoolEvents(events);
+    });
+    return () => unsubscribe();
+  }, [userId]);
 
   // Stav pro online suplování z ghb.bakalari.cz
   const [substitutionData, setSubstitutionData] = useState<DailySubstitutionResult | null>(null);
@@ -525,19 +562,39 @@ export const SchoolTimetable: React.FC = () => {
                         ? { bg: 'bg-amber-50/90', text: 'text-amber-900', border: 'border-amber-300' }
                         : defaultStyle;
 
+                      // Hledáme školní události (písemky, zkoušení, úkoly) pro tuto hodinu a datum
+                      const dayIso = format(day.date, 'yyyy-MM-dd');
+                      const lessonEvents = schoolEvents.filter(ev => 
+                        ev.date === dayIso && 
+                        ev.period === period.period && 
+                        ev.subject.toUpperCase() === activeLesson.subject.toUpperCase()
+                      );
+
+                      const hasExam = lessonEvents.some(ev => ev.type === 'exam');
+                      const hasOralExam = lessonEvents.some(ev => ev.type === 'oral_exam');
+                      const hasHomework = lessonEvents.some(ev => ev.type === 'homework' && !ev.isDone);
+
                       return (
                         <td 
                           key={period.period} 
                           className="p-1 border-r border-slate-100 last:border-r-0 align-middle"
                         >
                           <div
-                            onClick={() => setActiveLessonModal({
-                              lesson: activeLesson,
-                              period,
-                              dayName: day.name,
-                              dateStr: format(day.date, 'd. M. yyyy'),
-                              substitution: matchedChange
-                            })}
+                            onClick={() => {
+                              setShowAddEventForm(false);
+                              setNewEventTitle('');
+                              setNewEventType('exam');
+                              setNewEventNote('');
+                              setActiveLessonModal({
+                                lesson: activeLesson,
+                                period,
+                                dayName: day.name,
+                                date: day.date,
+                                dateStr: format(day.date, 'd. M. yyyy'),
+                                isoDate: dayIso,
+                                substitution: matchedChange
+                              });
+                            }}
                             className={`relative h-16 p-1.5 rounded-xl border transition cursor-pointer hover:shadow-xs hover:scale-[1.02] flex flex-col justify-between ${cellStyle.bg} ${cellStyle.border} ${cellStyle.text}`}
                             title={isCancelled ? `${activeLesson.subject} ODPADÁ!` : `${activeLesson.subject} (${activeLesson.teacher}, učebna ${activeLesson.room})`}
                           >
@@ -551,6 +608,27 @@ export const SchoolTimetable: React.FC = () => {
                             {isSubstituted && (
                               <div className="absolute -top-1.5 -right-1 px-1.5 py-0.2 rounded-full bg-amber-600 text-white font-extrabold text-[8px] uppercase tracking-wider shadow-xs">
                                 Supl
+                              </div>
+                            )}
+
+                            {/* Indikátory písemek / zkoušení / úkolů v rohu */}
+                            {!isCancelled && lessonEvents.length > 0 && (
+                              <div className="absolute -top-1.5 -right-1 flex items-center gap-0.5">
+                                {hasExam && (
+                                  <span className="w-4 h-4 rounded-full bg-rose-600 text-white flex items-center justify-center text-[9px] font-black shadow-xs" title="Písemka!">
+                                    P
+                                  </span>
+                                )}
+                                {hasOralExam && (
+                                  <span className="w-4 h-4 rounded-full bg-purple-600 text-white flex items-center justify-center text-[9px] font-black shadow-xs" title="Zkoušení!">
+                                    Z
+                                  </span>
+                                )}
+                                {hasHomework && (
+                                  <span className="w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center text-[9px] font-black shadow-xs" title="Domácí úkol!">
+                                    Ú
+                                  </span>
+                                )}
                               </div>
                             )}
 
@@ -598,7 +676,7 @@ export const SchoolTimetable: React.FC = () => {
 
       {/* DETAIL MODAL HODINY */}
       {activeLessonModal && (() => {
-        const { lesson, period, dayName, dateStr, substitution } = activeLessonModal;
+        const { lesson, period, dayName, dateStr, isoDate, substitution } = activeLessonModal;
         const style = SUBJECT_STYLES[lesson.subject] || {
           bg: 'bg-indigo-50',
           text: 'text-indigo-800',
@@ -610,10 +688,37 @@ export const SchoolTimetable: React.FC = () => {
           substitution.changeType.toLowerCase().includes('zrušeno')
         );
 
+        // Události pro tuto konkrétní hodinu
+        const currentLessonEvents = schoolEvents.filter(ev => 
+          ev.date === isoDate && 
+          ev.period === period.period && 
+          ev.subject.toUpperCase() === lesson.subject.toUpperCase()
+        );
+
+        const handleAddEventSubmit = async (e: React.FormEvent) => {
+          e.preventDefault();
+          if (!newEventTitle.trim()) return;
+
+          await createSchoolEvent({
+            userId,
+            date: isoDate,
+            period: period.period,
+            subject: lesson.subject,
+            type: newEventType,
+            title: newEventTitle.trim(),
+            note: newEventNote.trim() || undefined,
+            isDone: false
+          }, userId);
+
+          setNewEventTitle('');
+          setNewEventNote('');
+          setShowAddEventForm(false);
+        };
+
         return (
           <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
-            <div className="bg-white rounded-3xl max-w-sm w-full shadow-2xl border border-slate-200 overflow-hidden">
-              <div className={`p-6 border-b ${isCancelled ? 'bg-red-50 border-red-200 text-red-950' : `${style.bg} ${style.border}`}`}>
+            <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden max-h-[90vh] flex flex-col">
+              <div className={`p-5 border-b shrink-0 ${isCancelled ? 'bg-red-50 border-red-200 text-red-950' : `${style.bg} ${style.border}`}`}>
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold uppercase tracking-wider opacity-70">
                     {dayName}, {dateStr}
@@ -622,7 +727,7 @@ export const SchoolTimetable: React.FC = () => {
                     {period.period}. hodina
                   </span>
                 </div>
-                <h3 className={`text-3xl font-extrabold mt-2 tracking-tight ${isCancelled ? 'line-through text-red-900' : 'text-slate-900'}`}>
+                <h3 className={`text-2xl sm:text-3xl font-extrabold mt-1 tracking-tight ${isCancelled ? 'line-through text-red-900' : 'text-slate-900'}`}>
                   {lesson.subject}
                 </h3>
                 <div className="flex items-center gap-1.5 text-xs font-bold text-slate-600 mt-1">
@@ -633,7 +738,7 @@ export const SchoolTimetable: React.FC = () => {
 
               {/* Informace o suplování v modalu */}
               {substitution && (
-                <div className={`p-4 border-b text-xs ${
+                <div className={`p-4 border-b text-xs shrink-0 ${
                   isCancelled 
                     ? 'bg-red-100/60 border-red-200 text-red-950' 
                     : 'bg-amber-100/60 border-amber-200 text-amber-950'
@@ -659,47 +764,234 @@ export const SchoolTimetable: React.FC = () => {
                 </div>
               )}
 
-              <div className="p-6 space-y-3 text-xs">
-                <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100">
-                  <span className="font-bold text-slate-500 flex items-center gap-1.5">
-                    <User className="w-3.5 h-3.5 text-slate-400" />
-                    Vyučující:
-                  </span>
-                  <span className="font-extrabold text-slate-800 text-sm">
-                    {substitution?.substitute ? (
-                      <span>{substitution.substitute} <span className="text-xs font-normal text-slate-400 line-through">({lesson.teacher})</span></span>
-                    ) : (
-                      lesson.teacher
+              {/* Scrollovatelný obsah */}
+              <div className="p-5 space-y-4 text-xs overflow-y-auto">
+                {/* SEKCE: Písemky, zkoušení a úkoly */}
+                <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="font-extrabold text-slate-900 flex items-center gap-1.5 text-xs">
+                      <BookOpen className="w-4 h-4 text-indigo-600" />
+                      <span>Písemky, zkoušení a úkoly</span>
+                      <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-slate-200 text-slate-700">
+                        {currentLessonEvents.length}
+                      </span>
+                    </div>
+                    {!showAddEventForm && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAddEventForm(true)}
+                        className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-indigo-700 bg-white hover:bg-indigo-50 border border-indigo-200 rounded-xl transition cursor-pointer shadow-2xs"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Přidat</span>
+                      </button>
                     )}
-                  </span>
+                  </div>
+
+                  {/* Seznam existujících úkolů / písemek pro tuto hodinu */}
+                  {currentLessonEvents.length > 0 ? (
+                    <div className="space-y-2">
+                      {currentLessonEvents.map(ev => {
+                        const typeBadge = {
+                          exam: { label: 'Písemka', bg: 'bg-rose-100 text-rose-800 border-rose-200', icon: '📝' },
+                          oral_exam: { label: 'Zkoušení', bg: 'bg-purple-100 text-purple-800 border-purple-200', icon: '🗣️' },
+                          homework: { label: 'Domácí úkol', bg: 'bg-blue-100 text-blue-800 border-blue-200', icon: '📖' }
+                        }[ev.type];
+
+                        return (
+                          <div 
+                            key={ev.id}
+                            className={`p-2.5 rounded-xl border bg-white flex items-start justify-between gap-2.5 transition ${
+                              ev.isDone ? 'opacity-60 bg-slate-50 border-slate-200' : 'border-slate-200 shadow-2xs'
+                            }`}
+                          >
+                            <div className="flex items-start gap-2 min-w-0">
+                              <button
+                                type="button"
+                                onClick={() => updateSchoolEvent(ev.id, { isDone: !ev.isDone }, userId)}
+                                className={`mt-0.5 w-4 h-4 rounded-md border flex items-center justify-center transition cursor-pointer shrink-0 ${
+                                  ev.isDone 
+                                    ? 'bg-emerald-600 border-emerald-600 text-white' 
+                                    : 'border-slate-300 hover:border-slate-400 bg-white'
+                                }`}
+                                title={ev.isDone ? 'Označit jako nesplněno' : 'Označit jako hotovo / naučeno'}
+                              >
+                                {ev.isDone && <Check className="w-3 h-3 stroke-[3]" />}
+                              </button>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold border ${typeBadge.bg}`}>
+                                    {typeBadge.icon} {typeBadge.label}
+                                  </span>
+                                  <span className={`font-bold text-slate-900 text-xs break-words ${ev.isDone ? 'line-through text-slate-500' : ''}`}>
+                                    {ev.title}
+                                  </span>
+                                </div>
+                                {ev.note && (
+                                  <p className="text-[11px] text-slate-500 mt-1 break-words">
+                                    {ev.note}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => deleteSchoolEvent(ev.id, userId)}
+                              className="text-slate-400 hover:text-red-600 p-1 rounded-lg hover:bg-red-50 transition cursor-pointer shrink-0"
+                              title="Smazat záznam"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : !showAddEventForm ? (
+                    <div className="p-3 text-center text-slate-400 bg-white rounded-xl border border-dashed border-slate-200 text-[11px]">
+                      Žádná písemka, zkoušení ani domácí úkol na tuto hodinu.
+                    </div>
+                  ) : null}
+
+                  {/* FORMULÁŘ PRO PŘIDÁNÍ */}
+                  {showAddEventForm && (
+                    <form onSubmit={handleAddEventSubmit} className="bg-white p-3.5 rounded-2xl border border-indigo-200 shadow-xs space-y-3">
+                      <div className="font-bold text-slate-800 text-xs">
+                        Nová položka na tuto hodinu:
+                      </div>
+
+                      {/* Volba typu: Písemka / Zkoušení / DÚ */}
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setNewEventType('exam')}
+                          className={`py-1.5 px-2 rounded-xl text-[11px] font-bold border transition cursor-pointer text-center ${
+                            newEventType === 'exam' 
+                              ? 'bg-rose-50 border-rose-300 text-rose-800 shadow-2xs' 
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          📝 Písemka
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNewEventType('oral_exam')}
+                          className={`py-1.5 px-2 rounded-xl text-[11px] font-bold border transition cursor-pointer text-center ${
+                            newEventType === 'oral_exam' 
+                              ? 'bg-purple-50 border-purple-300 text-purple-800 shadow-2xs' 
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          🗣️ Zkoušení
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNewEventType('homework')}
+                          className={`py-1.5 px-2 rounded-xl text-[11px] font-bold border transition cursor-pointer text-center ${
+                            newEventType === 'homework' 
+                              ? 'bg-blue-50 border-blue-300 text-blue-800 shadow-2xs' 
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          📖 Úkol
+                        </button>
+                      </div>
+
+                      {/* Název / Látka */}
+                      <div>
+                        <input
+                          type="text"
+                          required
+                          value={newEventTitle}
+                          onChange={(e) => setNewEventTitle(e.target.value)}
+                          placeholder={
+                            newEventType === 'exam' 
+                              ? 'Téma písemky (např. Derivace a integrály)...' 
+                              : newEventType === 'oral_exam'
+                              ? 'Téma zkoušení (např. Národní obrození)...'
+                              : 'Zadání úkolu (např. str. 45 / cv. 3)...'
+                          }
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 font-medium"
+                        />
+                      </div>
+
+                      {/* Volitelná poznámka */}
+                      <div>
+                        <input
+                          type="text"
+                          value={newEventNote}
+                          onChange={(e) => setNewEventNote(e.target.value)}
+                          placeholder="Poznámka / materiály (volitelné)..."
+                          className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+
+                      {/* Tlačítka formuláře */}
+                      <div className="flex items-center justify-end gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAddEventForm(false);
+                            setNewEventTitle('');
+                            setNewEventNote('');
+                          }}
+                          className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer font-semibold"
+                        >
+                          Zrušit
+                        </button>
+                        <button
+                          type="submit"
+                          className="px-3 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition cursor-pointer font-bold shadow-xs"
+                        >
+                          Uložit
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </div>
 
-                <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100">
-                  <span className="font-bold text-slate-500 flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                    Učebna:
-                  </span>
-                  <span className="font-extrabold text-indigo-700 text-sm font-mono">
-                    {substitution?.room || lesson.room}
-                  </span>
-                </div>
-
-                {lesson.group && (
+                {/* ZÁKLADNÍ ÚDAJE O HODINĚ */}
+                <div className="space-y-2">
                   <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100">
-                    <span className="font-bold text-slate-500">Skupina / Třída:</span>
-                    <span className="font-bold text-slate-800">{lesson.group}</span>
+                    <span className="font-bold text-slate-500 flex items-center gap-1.5">
+                      <User className="w-3.5 h-3.5 text-slate-400" />
+                      Vyučující:
+                    </span>
+                    <span className="font-extrabold text-slate-800 text-sm">
+                      {substitution?.substitute ? (
+                        <span>{substitution.substitute} <span className="text-xs font-normal text-slate-400 line-through">({lesson.teacher})</span></span>
+                      ) : (
+                        lesson.teacher
+                      )}
+                    </span>
                   </div>
-                )}
 
-                {lesson.weekType && (
-                  <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900">
-                    <span className="font-bold">Střídání týdnů:</span>{' '}
-                    {lesson.weekType === 'even' ? 'Sudý týden (S)' : 'Lichý týden (L)'}
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100">
+                    <span className="font-bold text-slate-500 flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                      Učebna:
+                    </span>
+                    <span className="font-extrabold text-indigo-700 text-sm font-mono">
+                      {substitution?.room || lesson.room}
+                    </span>
                   </div>
-                )}
+
+                  {lesson.group && (
+                    <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100">
+                      <span className="font-bold text-slate-500">Skupina / Třída:</span>
+                      <span className="font-bold text-slate-800">{lesson.group}</span>
+                    </div>
+                  )}
+
+                  {lesson.weekType && (
+                    <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900">
+                      <span className="font-bold">Střídání týdnů:</span>{' '}
+                      {lesson.weekType === 'even' ? 'Sudý týden (S)' : 'Lichý týden (L)'}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex justify-end">
+              <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex justify-end shrink-0">
                 <button
                   type="button"
                   onClick={() => setActiveLessonModal(null)}

@@ -119,3 +119,19 @@ export interface CalendarEvent {
   createdAt: string;
 }
 
+export type SchoolEventItemType = 'exam' | 'oral_exam' | 'homework'; // písemka | zkoušení | domácí úkol
+
+export interface SchoolLessonEvent {
+  id: string;
+  userId: string;
+  date: string; // YYYY-MM-DD
+  period: number; // 0 - 9
+  subject: string; // MA, CJ, AJ...
+  type: SchoolEventItemType; // 'exam' | 'oral_exam' | 'homework'
+  title: string; // Popis / látka / téma
+  note?: string; // Doplňující poznámka
+  isDone?: boolean; // Splněno / naučeno / odevzdáno
+  createdAt: string;
+}
+
+

@@ -12,7 +12,7 @@ import {
   arrayRemove
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Project, Section, Task, ChristmasGift, CalendarEvent, PendingCompensation } from '../types';
+import { Project, Section, Task, ChristmasGift, CalendarEvent, PendingCompensation, SchoolLessonEvent } from '../types';
 
 // PROJECTS
 export const subscribeProjects = (callback: (projects: Project[]) => void) => {
@@ -768,3 +768,78 @@ export const markTutoringAsContinuousForStudent = (userId: string, studentColorN
     notifyCalendarChange(userId);
   }
 };
+
+// SCHOOL LESSON EVENTS (Písemka, Zkoušení, Domácí úkol na konkrétní hodinu)
+const getSchoolEventsKey = (userId: string) => `school_lesson_events_${userId}`;
+
+export const getLocalSchoolEvents = (userId: string): SchoolLessonEvent[] => {
+  try {
+    const raw = localStorage.getItem(getSchoolEventsKey(userId));
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+};
+
+export const saveLocalSchoolEvents = (userId: string, events: SchoolLessonEvent[]) => {
+  try {
+    localStorage.setItem(getSchoolEventsKey(userId), JSON.stringify(events));
+  } catch (e) {
+    console.error("Error saving local school events:", e);
+  }
+};
+
+const notifySchoolEventsChange = (userId: string) => {
+  window.dispatchEvent(new CustomEvent(`school_events_changed_${userId}`));
+};
+
+export const subscribeSchoolEvents = (userId: string, callback: (events: SchoolLessonEvent[]) => void) => {
+  const current = getLocalSchoolEvents(userId);
+  callback(current);
+
+  const handler = () => {
+    callback(getLocalSchoolEvents(userId));
+  };
+
+  window.addEventListener(`school_events_changed_${userId}`, handler);
+  window.addEventListener('storage', handler);
+
+  return () => {
+    window.removeEventListener(`school_events_changed_${userId}`, handler);
+    window.removeEventListener('storage', handler);
+  };
+};
+
+export const createSchoolEvent = async (data: Omit<SchoolLessonEvent, 'id' | 'createdAt'>, userId: string): Promise<string> => {
+  const id = 'school_ev_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+  const newEv: SchoolLessonEvent = {
+    ...data,
+    id,
+    createdAt: new Date().toISOString()
+  };
+
+  const list = getLocalSchoolEvents(userId);
+  list.push(newEv);
+  saveLocalSchoolEvents(userId, list);
+  notifySchoolEventsChange(userId);
+  return id;
+};
+
+export const updateSchoolEvent = async (id: string, updates: Partial<SchoolLessonEvent>, userId: string): Promise<void> => {
+  const list = getLocalSchoolEvents(userId);
+  const idx = list.findIndex(e => e.id === id);
+  if (idx !== -1) {
+    list[idx] = { ...list[idx], ...updates };
+    saveLocalSchoolEvents(userId, list);
+    notifySchoolEventsChange(userId);
+  }
+};
+
+export const deleteSchoolEvent = async (id: string, userId: string): Promise<void> => {
+  const list = getLocalSchoolEvents(userId);
+  const filtered = list.filter(e => e.id !== id);
+  saveLocalSchoolEvents(userId, filtered);
+  notifySchoolEventsChange(userId);
+};
+
