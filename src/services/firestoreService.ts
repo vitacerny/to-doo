@@ -12,7 +12,7 @@ import {
   arrayRemove
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Project, Section, Task, ChristmasGift, CalendarEvent } from '../types';
+import { Project, Section, Task, ChristmasGift, CalendarEvent, PendingCompensation } from '../types';
 
 // PROJECTS
 export const subscribeProjects = (callback: (projects: Project[]) => void) => {
@@ -297,8 +297,46 @@ export const deleteChristmasGift = async (giftId: string) => {
 };
 
 // ==========================================
-// CALENDAR EVENTS (Dual-layer: LocalStorage + Firestore sync)
+// PENDING COMPENSATIONS (Chybějící hodiny k nahrazení)
 // ==========================================
+const getCompensationsStorageKey = (userId: string) => `pending_compensations_${userId}`;
+
+export const getLocalPendingCompensations = (userId: string): PendingCompensation[] => {
+  try {
+    const raw = localStorage.getItem(getCompensationsStorageKey(userId));
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+};
+
+export const saveLocalPendingCompensations = (userId: string, comps: PendingCompensation[]) => {
+  try {
+    localStorage.setItem(getCompensationsStorageKey(userId), JSON.stringify(comps));
+    window.dispatchEvent(new CustomEvent(`pending_compensations_changed_${userId}`));
+  } catch (e) {
+    console.error("Error saving pending compensations:", e);
+  }
+};
+
+export const addPendingCompensation = (comp: Omit<PendingCompensation, 'id' | 'cancelledAt'>) => {
+  const list = getLocalPendingCompensations(comp.userId);
+  const newComp: PendingCompensation = {
+    ...comp,
+    id: 'comp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+    cancelledAt: new Date().toISOString()
+  };
+  list.push(newComp);
+  saveLocalPendingCompensations(comp.userId, list);
+  return newComp;
+};
+
+export const removePendingCompensation = (userId: string, compId: string) => {
+  const list = getLocalPendingCompensations(userId);
+  const filtered = list.filter(c => c.id !== compId);
+  saveLocalPendingCompensations(userId, filtered);
+};
 const getCalendarStorageKey = (userId: string) => `calendar_events_${userId}`;
 
 /**
@@ -507,6 +545,10 @@ export const updateCalendarEvent = async (eventId: string, data: Partial<Calenda
     for (const [k, v] of Object.entries(data)) {
       if (v !== undefined) payload[k] = v;
     }
+    // Pokud je přítomno tutoring, zkontrolujeme, že se status uloží a nepřepíše
+    if (data.tutoring) {
+      payload.tutoring = data.tutoring;
+    }
     await updateDoc(docRef, payload);
   } catch (err) {
     console.warn("Firestore update skipped, stored locally:", err);
@@ -604,7 +646,8 @@ export const rebalanceTutoringSeries = async (
         studentColor: colorName,
         subject: expectedSubject,
         sequenceIndex: i,
-        sequencePattern: pattern
+        sequencePattern: pattern,
+        status: ev.tutoring?.status // Explicitně zachováme stav (např. 'recorded', 'paid' apod.)
       };
       await updateCalendarEvent(ev.id, {
         title: newTitle,

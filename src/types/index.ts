@@ -89,6 +89,20 @@ export interface TutoringDetails {
   targetPreparationNote?: string; // co si chci připravit (volitelné u stavu 'unprepared')
 }
 
+export interface PendingCompensation {
+  id: string;
+  userId: string;
+  studentColor: string;
+  originalDate: string;
+  originalSubject: string;
+  type: TutoringType;
+  place: TutoringPlace;
+  goal?: TutoringGoal;
+  sequencePattern?: string[];
+  recurringSeriesId?: string;
+  cancelledAt: string;
+}
+
 export interface CalendarEvent {
   id: string;
   userId: string;

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { CalendarEvent, EventCategory, Task, Project, TutoringDetails, TutoringType, TutoringPlace, TutoringGoal, TutoringStatus } from '../types';
+import { CalendarEvent, EventCategory, Task, Project, TutoringDetails, TutoringType, TutoringPlace, TutoringGoal, TutoringStatus, PendingCompensation } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { 
   createCalendarEvent, 
@@ -7,7 +7,10 @@ import {
   deleteCalendarEvent,
   rebalanceTutoringSeries,
   markTutoringAsContinuousForStudent,
-  ensureWednesdayLessonForRedStudent
+  ensureWednesdayLessonForRedStudent,
+  getLocalPendingCompensations,
+  addPendingCompensation,
+  removePendingCompensation
 } from '../services/firestoreService';
 import { 
   format, 
@@ -171,6 +174,11 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [viewingEvent, setViewingEvent] = useState<CalendarEvent | null>(null);
 
+  // Zrušení / Náhrada hodiny
+  const [cancelModalEvent, setCancelModalEvent] = useState<CalendarEvent | null>(null);
+  const [showReschedulePicker, setShowReschedulePicker] = useState(false);
+  const [pendingCompensations, setPendingCompensations] = useState<PendingCompensation[]>([]);
+
   // Form State
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -208,6 +216,15 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     if (currentUser) {
       markTutoringAsContinuousForStudent(currentUser.uid, 'modrá');
       ensureWednesdayLessonForRedStudent(currentUser.uid);
+      setPendingCompensations(getLocalPendingCompensations(currentUser.uid));
+
+      const handleCompChange = () => {
+        setPendingCompensations(getLocalPendingCompensations(currentUser.uid));
+      };
+      window.addEventListener(`pending_compensations_changed_${currentUser.uid}`, handleCompChange);
+      return () => {
+        window.removeEventListener(`pending_compensations_changed_${currentUser.uid}`, handleCompChange);
+      };
     }
   }, [currentUser]);
 
@@ -613,6 +630,176 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     }
   };
 
+  // Nalezení volných termínů v aktuálním a příštím týdnu pro nahrazení hodiny
+  // Podmínky uživatele:
+  // 1. Termín v aktuálním a příštím týdnu (po–ne)
+  // 2. Alespoň 60 minut volno (žádná jiná událost nekoliduje)
+  // 3. Daný student v ten den ještě NEMÁ žádnou hodinu
+  // 4. Termín nesmí být v minulosti
+  const findAvailableSlotsForCompensation = (studentColorName: string): { date: string; startTime: string; endTime: string; label: string }[] => {
+    const slots: { date: string; startTime: string; endTime: string; label: string }[] = [];
+    const now = new Date();
+    const currentWeekMon = startOfWeek(now, { weekStartsOn: 1 });
+    const nextWeekSun = endOfWeek(addWeeks(currentWeekMon, 1), { weekStartsOn: 1 });
+    const allDays = eachDayOfInterval({ start: currentWeekMon, end: nextWeekSun });
+
+    // Typické časy doučování v odpoledních hodinách k nabídnutí (např. 14:00, 15:15, 16:30, 17:45, 19:00)
+    const slotTimes = [
+      { start: '14:00', end: '15:00' },
+      { start: '15:15', end: '16:15' },
+      { start: '16:30', end: '17:30' },
+      { start: '17:45', end: '18:45' },
+      { start: '19:00', end: '20:00' }
+    ];
+
+    const normStudent = studentColorName.trim().toLowerCase();
+
+    for (const d of allDays) {
+      const dStr = format(d, 'yyyy-MM-dd');
+
+      // Podmínka: Daný student ten den ještě ŽÁDNOU hodinu nemá
+      const studentHasLessonThisDay = events.some(e => 
+        e.date === dStr &&
+        e.category === 'tutoring' &&
+        e.tutoring?.studentColor?.trim().toLowerCase() === normStudent
+      );
+      if (studentHasLessonThisDay) continue;
+
+      for (const t of slotTimes) {
+        // Kontrola, zda slot není v minulosti
+        const [sh, sm] = t.start.split(':').map(Number);
+        const slotDate = new Date(d);
+        slotDate.setHours(sh, sm, 0, 0);
+        if (slotDate < now) continue;
+
+        // Kontrola kolize (volno alespoň 60 minut)
+        const collisions = checkCollisions([dStr], t.start, t.end);
+        if (collisions.length === 0) {
+          slots.push({
+            date: dStr,
+            startTime: t.start,
+            endTime: t.end,
+            label: `${format(d, 'EEEE d. M.', { locale: cs })} v ${t.start} – ${t.end}`
+          });
+        }
+      }
+    }
+
+    return slots;
+  };
+
+  // Akce 1: Zrušit hodinu bez náhrady (nenahrazovat)
+  const handleCancelWithoutCompensation = async (ev: CalendarEvent) => {
+    if (!currentUser) return;
+    try {
+      await deleteCalendarEvent(ev.id);
+      if (ev.recurringSeriesId || ev.category === 'tutoring') {
+        await rebalanceTutoringSeries({
+          seriesId: ev.recurringSeriesId,
+          studentColor: ev.tutoring?.studentColor
+        }, currentUser.uid);
+      }
+      setCancelModalEvent(null);
+      setViewingEvent(null);
+      setShowReschedulePicker(false);
+    } catch (err) {
+      console.error(err);
+      alert('Chyba při rušení hodiny.');
+    }
+  };
+
+  // Akce 2: Zrušit hodinu a nahradit ji později (uložit do pending_compensations)
+  const handleCancelAndPostponeCompensation = async (ev: CalendarEvent) => {
+    if (!currentUser || !ev.tutoring) return;
+    try {
+      // Uložíme informaci o chybějící hodině
+      addPendingCompensation({
+        userId: currentUser.uid,
+        studentColor: ev.tutoring.studentColor,
+        originalDate: ev.date,
+        originalSubject: ev.tutoring.subject,
+        type: ev.tutoring.type,
+        place: ev.tutoring.place,
+        goal: ev.tutoring.goal,
+        sequencePattern: ev.tutoring.sequencePattern,
+        recurringSeriesId: ev.recurringSeriesId
+      });
+
+      // Smažeme zrušenou lekci z kalendáře a přebalancujeme
+      await deleteCalendarEvent(ev.id);
+      if (ev.recurringSeriesId || ev.category === 'tutoring') {
+        await rebalanceTutoringSeries({
+          seriesId: ev.recurringSeriesId,
+          studentColor: ev.tutoring?.studentColor
+        }, currentUser.uid);
+      }
+
+      setCancelModalEvent(null);
+      setViewingEvent(null);
+      setShowReschedulePicker(false);
+      alert(`Hodina pro studenta ${ev.tutoring.studentColor} byla zrušena a uložena jako "Chybějící hodina k nahrazení". Můžete ji kdykoliv nahradit.`);
+    } catch (err) {
+      console.error(err);
+      alert('Chyba při rušení hodiny.');
+    }
+  };
+
+  // Akce 3: Zrušit hodinu a rovnou vybrat náhradní termín
+  const handleScheduleCompensation = async (ev: CalendarEvent, targetDate: string, sTime: string, eTime: string, compIdToRemove?: string) => {
+    if (!currentUser || !ev.tutoring) return;
+    try {
+      const tut = ev.tutoring;
+      const finalColor = mapColorNameToKey(tut.studentColor);
+
+      // Pokud byla lekce v kalendáři a teprve ji rušíme, smažeme původní
+      if (events.some(e => e.id === ev.id)) {
+        await deleteCalendarEvent(ev.id);
+      }
+
+      // Pokud to byla již uložená chybějící hodina, smažeme ji ze seznamu k nahrazení
+      if (compIdToRemove) {
+        removePendingCompensation(currentUser.uid, compIdToRemove);
+      }
+
+      // Vytvoříme novou jednorázovou náhradní hodinu
+      await createCalendarEvent({
+        userId: currentUser.uid,
+        title: `Doučování ${tut.subject} (${tut.studentColor})`,
+        description: `Náhradní hodina za ${format(new Date(ev.date + 'T12:00:00'), 'd. M. yyyy')}`,
+        date: targetDate,
+        startTime: sTime,
+        endTime: eTime,
+        color: finalColor,
+        category: 'tutoring',
+        tutoring: {
+          studentColor: tut.studentColor,
+          type: tut.type,
+          place: tut.place,
+          goal: tut.goal,
+          subject: tut.subject,
+          sequencePattern: tut.sequencePattern,
+          status: 'unprepared'
+        },
+        recurringSeriesId: ev.recurringSeriesId,
+        isDone: false
+      });
+
+      // Přebalancujeme celou sérii studenta, aby předměty perfektně seděly
+      await rebalanceTutoringSeries({
+        seriesId: ev.recurringSeriesId,
+        studentColor: tut.studentColor
+      }, currentUser.uid);
+
+      setCancelModalEvent(null);
+      setViewingEvent(null);
+      setShowReschedulePicker(false);
+      alert(`Náhradní hodina pro studenta ${tut.studentColor} byla úspěšně naplánována na ${format(new Date(targetDate + 'T12:00:00'), 'd. M. yyyy')} v ${sTime}!`);
+    } catch (err) {
+      console.error(err);
+      alert('Chyba při plánování náhrady.');
+    }
+  };
+
   const handleDeleteEvent = async (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (!window.confirm('Opravdu chcete smazat tuto událost?')) return;
@@ -796,6 +983,76 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           </button>
         </div>
       </div>
+
+      {/* LIŠTA CHYBĚJÍCÍCH HODIN K NAHRAZENÍ (pokud uživatel zvolil Nahradit později) */}
+      {pendingCompensations.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 shadow-sm space-y-2.5 animate-in fade-in duration-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-amber-900 font-bold text-sm">
+              <Clock className="w-4 h-4 text-amber-600" />
+              <span>Chybějící hodiny k nahrazení ({pendingCompensations.length}):</span>
+            </div>
+            <span className="text-xs text-amber-700 font-semibold">
+              Hodiny zrušené s volbou „Nahradit později“
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+            {pendingCompensations.map((comp) => {
+              const fakeEvent: CalendarEvent = {
+                id: comp.id,
+                userId: comp.userId,
+                title: `Doučování ${comp.originalSubject} (${comp.studentColor})`,
+                date: comp.originalDate,
+                startTime: '16:30',
+                endTime: '17:30',
+                color: mapColorNameToKey(comp.studentColor),
+                category: 'tutoring',
+                tutoring: {
+                  studentColor: comp.studentColor,
+                  type: comp.type,
+                  place: comp.place,
+                  goal: comp.goal,
+                  subject: comp.originalSubject,
+                  sequencePattern: comp.sequencePattern,
+                  status: 'unprepared'
+                },
+                recurringSeriesId: comp.recurringSeriesId,
+                createdAt: comp.cancelledAt
+              };
+
+              return (
+                <div
+                  key={comp.id}
+                  className="bg-white p-3 rounded-xl border border-amber-200/80 shadow-xs flex items-center justify-between gap-3 text-xs"
+                >
+                  <div>
+                    <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <GraduationCap className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>{comp.originalSubject} • {comp.studentColor}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Zrušeno z termínu {format(new Date(comp.originalDate + 'T12:00:00'), 'd. M. yyyy')}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCancelModalEvent(fakeEvent);
+                      setShowReschedulePicker(true);
+                    }}
+                    className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs transition cursor-pointer shadow-xs shrink-0 flex items-center gap-1"
+                  >
+                    <span>Nahradit</span>
+                    <span>➔</span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Calendar Controls (Month/Week/Day + Prev/Next/Today) */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white px-5 py-3 rounded-2xl border border-slate-200/80 shadow-sm">
@@ -1519,20 +1776,34 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                 )}
               </div>
 
-              {/* Footer s tlačítkem Upravit */}
+              {/* Footer s tlačítky Zrušit a Upravit */}
               <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100 bg-slate-50/50">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const id = ev.id;
-                    setViewingEvent(null);
-                    handleDeleteEvent(id);
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-2 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-semibold transition cursor-pointer"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Smazat
-                </button>
+                {tut ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCancelModalEvent(ev);
+                      setShowReschedulePicker(false);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-2 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-bold transition cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                    Zrušit hodinu
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = ev.id;
+                      setViewingEvent(null);
+                      handleDeleteEvent(id);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-2 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-semibold transition cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Smazat
+                  </button>
+                )}
 
                 <div className="flex items-center gap-2">
                   <button
@@ -1551,6 +1822,167 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                     Upravit hodinu
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* DIALOG PRO ZRUŠENÍ HODINY A VÝBĚR NÁHRADY */}
+      {cancelModalEvent && (() => {
+        const ev = cancelModalEvent;
+        const tut = ev.tutoring;
+        const availableSlots = tut ? findAvailableSlotsForCompensation(tut.studentColor) : [];
+
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+            <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-rose-50/60">
+                <div className="flex items-center gap-2 text-rose-700">
+                  <AlertTriangle className="w-5 h-5 text-rose-600" />
+                  <h3 className="text-base font-bold text-slate-900">
+                    Zrušení hodiny doučování
+                  </h3>
+                </div>
+                <button
+                  onClick={() => {
+                    setCancelModalEvent(null);
+                    setShowReschedulePicker(false);
+                  }}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+                <p className="text-sm text-slate-700">
+                  Chcete zrušit hodinu <strong>{ev.title}</strong> dne <strong>{format(new Date(ev.date + 'T12:00:00'), 'EEEE d. M. yyyy', { locale: cs })}</strong> v čase {ev.startTime}–{ev.endTime}?
+                </p>
+
+                {/* Výběr postupu */}
+                {!showReschedulePicker ? (
+                  <div className="space-y-3 pt-2">
+                    <span className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      Zvolte postup pro zrušení:
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() => handleCancelWithoutCompensation(ev)}
+                      className="w-full p-3.5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 transition cursor-pointer text-left flex items-start gap-3 group"
+                    >
+                      <div className="p-2 rounded-xl bg-slate-100 text-slate-600 group-hover:bg-slate-200 transition">
+                        <Trash2 className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-slate-800">Nenahrazovat</div>
+                        <p className="text-[11px] text-slate-500">
+                          Hodina se zruší a nebude se hledat žádný náhradní termín. Zbylé hodiny se přeorganizují.
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowReschedulePicker(true)}
+                      className="w-full p-3.5 rounded-2xl border border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 transition cursor-pointer text-left flex items-start gap-3 group"
+                    >
+                      <div className="p-2 rounded-xl bg-indigo-100 text-indigo-700 group-hover:bg-indigo-200 transition">
+                        <CalendarIcon className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-indigo-950">Nahradit hned (vybrat volný termín)</div>
+                        <p className="text-[11px] text-indigo-800/80">
+                          Zobrazí volné termíny v tomto a příštím týdnu, kdy nemáte jiný program a student v ten den nemá hodinu.
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleCancelAndPostponeCompensation(ev)}
+                      className="w-full p-3.5 rounded-2xl border border-amber-200 bg-amber-50/50 hover:bg-amber-50 transition cursor-pointer text-left flex items-start gap-3 group"
+                    >
+                      <div className="p-2 rounded-xl bg-amber-100 text-amber-700 group-hover:bg-amber-200 transition">
+                        <Clock className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-amber-950">Nahradit později</div>
+                        <p className="text-[11px] text-amber-800/80">
+                          Uloží se, že pro tohoto studenta dlužíte 1 hodinu k doplánování, a termín vyberete kdykoliv později.
+                        </p>
+                      </div>
+                    </button>
+                  </div>
+                ) : (
+                  /* Výběr volného termínu pro náhradu */
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-indigo-950 uppercase tracking-wider">
+                        Volné termíny v tomto a příštím týdnu:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowReschedulePicker(false)}
+                        className="text-xs text-indigo-600 hover:underline font-semibold cursor-pointer"
+                      >
+                        Zpět na volby
+                      </button>
+                    </div>
+
+                    <p className="text-[11px] text-slate-500">
+                      Zobrazeny jsou časy s alespoň 60 min volna, kdy student {tut?.studentColor} v daný den nemá jinou lekci.
+                    </p>
+
+                    <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                      {availableSlots.length > 0 ? (
+                        availableSlots.map((slot, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => handleScheduleCompensation(ev, slot.date, slot.startTime, slot.endTime)}
+                            className="w-full p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 transition cursor-pointer text-left flex items-center justify-between text-xs group"
+                          >
+                            <span className="font-semibold text-slate-800 group-hover:text-indigo-900 capitalize">
+                              {slot.label}
+                            </span>
+                            <span className="text-[10px] font-bold text-indigo-600 opacity-0 group-hover:opacity-100 transition">
+                              Vybrat termín ➔
+                            </span>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="p-4 rounded-xl bg-slate-50 text-center text-xs text-slate-500">
+                          V tomto ani příštím týdnu nebyl nalezen žádný zcela volný termín bez kolize.
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => handleCancelAndPostponeCompensation(ev)}
+                        className="text-xs text-amber-700 font-bold hover:underline cursor-pointer"
+                      >
+                        ⏱️ Raději nahradit později
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end px-6 py-3 border-t border-slate-100 bg-slate-50/50">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCancelModalEvent(null);
+                    setShowReschedulePicker(false);
+                  }}
+                  className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  Zavřít okno
+                </button>
               </div>
             </div>
           </div>
