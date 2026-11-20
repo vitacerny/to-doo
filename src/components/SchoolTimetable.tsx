@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { format, addWeeks, subWeeks, startOfWeek, endOfWeek, isSameDay } from 'date-fns';
+import { format, addWeeks, subWeeks, startOfWeek, endOfWeek, isSameDay, getDay } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { 
   ChevronLeft, 
@@ -155,6 +155,39 @@ export const getISOWeekNumber = (date: Date): number => {
   d.setUTCDate(d.getUTCDate() + 4 - dayNum);
   const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
   return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+};
+
+// Pomocná funkce pro zjištění konce vyučování v daný den (pro plánování doučování)
+export const getSchoolDayEndDetails = (date: Date): { period: number; endTime: string } | null => {
+  const dayOfWeek = getDay(date); // 0 = Ne, 1 = Po, ..., 6 = So
+  if (dayOfWeek < 1 || dayOfWeek > 5) return null; // Víkend nemá školu
+
+  const isoWeek = getISOWeekNumber(date);
+  const isEvenWeek = isoWeek % 2 === 0;
+
+  const dayLessons = SCHOOL_TIMETABLE[dayOfWeek] || {};
+  let maxPeriod = -1;
+
+  for (const periodStr of Object.keys(dayLessons)) {
+    const pNum = Number(periodStr);
+    const lessons = dayLessons[pNum] || [];
+    const active = lessons.some(l => {
+      if (!l.weekType || l.weekType === 'both') return true;
+      if (isEvenWeek && l.weekType === 'even') return true;
+      if (!isEvenWeek && l.weekType === 'odd') return true;
+      return false;
+    });
+    if (active && pNum > maxPeriod) {
+      maxPeriod = pNum;
+    }
+  }
+
+  if (maxPeriod === -1) return null;
+  const pObj = PERIODS.find(p => p.period === maxPeriod);
+  return {
+    period: maxPeriod,
+    endTime: pObj ? pObj.endTime : '16:10'
+  };
 };
 
 export const SchoolTimetable: React.FC = () => {

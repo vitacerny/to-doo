@@ -49,7 +49,7 @@ import {
   RotateCcw,
   BookOpen
 } from 'lucide-react';
-import { SchoolTimetable } from './SchoolTimetable';
+import { SchoolTimetable, getSchoolDayEndDetails } from './SchoolTimetable';
 
 interface PlannerProps {
   events: CalendarEvent[];
@@ -183,6 +183,20 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const [cancelModalEvent, setCancelModalEvent] = useState<CalendarEvent | null>(null);
   const [showReschedulePicker, setShowReschedulePicker] = useState(false);
   const [pendingCompensations, setPendingCompensations] = useState<PendingCompensation[]>([]);
+  // Zvolený časový blok při upřesňování náhrady
+  const [selectedCompensationBlock, setSelectedCompensationBlock] = useState<{
+    date: string;
+    startTime: string;
+    endTime: string;
+    startMin: number;
+    endMin: number;
+    label: string;
+    dayLabel: string;
+    allowedPlaces: ('library' | 'office')[];
+  } | null>(null);
+  const [compensationChosenStart, setCompensationChosenStart] = useState<string>('');
+  const [compensationDuration, setCompensationDuration] = useState<number>(60);
+  const [compensationChosenPlace, setCompensationChosenPlace] = useState<'library' | 'office'>('library');
 
   // Form State
   const [title, setTitle] = useState('');
@@ -635,29 +649,64 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     }
   };
 
-  // Nalezení volných termínů v aktuálním a příštím týdnu pro nahrazení hodiny
-  // Podmínky uživatele:
-  // 1. Termín v aktuálním a příštím týdnu (po–ne)
-  // 2. Alespoň 60 minut volno (žádná jiná událost nekoliduje)
-  // 3. Daný student v ten den ještě NEMÁ žádnou hodinu
-  // 4. Termín nesmí být v minulosti
-  const findAvailableSlotsForCompensation = (studentColorName: string): { date: string; startTime: string; endTime: string; label: string }[] => {
-    const slots: { date: string; startTime: string; endTime: string; label: string }[] = [];
+  // Nalezení volných časových bloků v aktuálním a příštím týdnu pro nahrazení hodiny
+  // Pravidla:
+  // 1. Zobrazení celých souvislých volných bloků (délka >= 60 minut).
+  // 2. Začátek nejdříve podle konce vyučování daný den:
+  //    - Konec v 16:10 -> nejdřív 16:30
+  //    - Konec v 15:20 -> nejdřív 15:30
+  //    - Konec v 14:30 -> nejdřív 14:45
+  //    - Jinak (dřívější konec / víkend) -> nejdřív 14:00
+  // 3. Horní limit konce bloku:
+  //    - Soukromé doučování: knihovna zavírá v 18:00, soukromé nesmí do kanclu -> konec nejpozději 18:00.
+  //    - Firemní doučování: může končit nejpozději v 19:00 (pokud končí po 18:00, musí být v kanclu).
+  // 4. Student v daný den nesmí mít jinou lekci.
+  // 5. Blok nesmí být v minulosti.
+  const findAvailableBlocksForCompensation = (
+    studentColorName: string, 
+    tutType: TutoringType = 'company'
+  ): {
+    date: string;
+    startTime: string;
+    endTime: string;
+    startMin: number;
+    endMin: number;
+    label: string;
+    dayLabel: string;
+    allowedPlaces: ('library' | 'office')[];
+  }[] => {
+    const blocks: {
+      date: string;
+      startTime: string;
+      endTime: string;
+      startMin: number;
+      endMin: number;
+      label: string;
+      dayLabel: string;
+      allowedPlaces: ('library' | 'office')[];
+    }[] = [];
+
     const now = new Date();
     const currentWeekMon = startOfWeek(now, { weekStartsOn: 1 });
     const nextWeekSun = endOfWeek(addWeeks(currentWeekMon, 1), { weekStartsOn: 1 });
     const allDays = eachDayOfInterval({ start: currentWeekMon, end: nextWeekSun });
 
-    // Typické časy doučování v odpoledních hodinách k nabídnutí (např. 14:00, 15:15, 16:30, 17:45, 19:00)
-    const slotTimes = [
-      { start: '14:00', end: '15:00' },
-      { start: '15:15', end: '16:15' },
-      { start: '16:30', end: '17:30' },
-      { start: '17:45', end: '18:45' },
-      { start: '19:00', end: '20:00' }
-    ];
-
     const normStudent = studentColorName.trim().toLowerCase();
+
+    const toMinutes = (timeStr: string) => {
+      const [h, m] = timeStr.split(':').map(Number);
+      return h * 60 + m;
+    };
+
+    const toTimeStr = (totalMinutes: number) => {
+      const h = Math.floor(totalMinutes / 60);
+      const m = totalMinutes % 60;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    };
+
+    // Maximální možný konec podle typu doučování:
+    // soukromé: 18:00 (knihovna zavírá), firemní: 19:00
+    const hardEndMinute = tutType === 'private' ? 18 * 60 : 19 * 60;
 
     for (const d of allDays) {
       const dStr = format(d, 'yyyy-MM-dd');
@@ -670,27 +719,126 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
       );
       if (studentHasLessonThisDay) continue;
 
-      for (const t of slotTimes) {
-        // Kontrola, zda slot není v minulosti
-        const [sh, sm] = t.start.split(':').map(Number);
-        const slotDate = new Date(d);
-        slotDate.setHours(sh, sm, 0, 0);
-        if (slotDate < now) continue;
+      // Zjistíme, kdy končí vyučování
+      const schoolEnd = getSchoolDayEndDetails(d);
+      let dayEarliestStartMin = 14 * 60; // výchozí 14:00
 
-        // Kontrola kolize (volno alespoň 60 minut)
-        const collisions = checkCollisions([dStr], t.start, t.end);
-        if (collisions.length === 0) {
-          slots.push({
+      if (schoolEnd) {
+        if (schoolEnd.endTime >= '16:10') {
+          dayEarliestStartMin = 16 * 60 + 30; // 16:30
+        } else if (schoolEnd.endTime >= '15:20') {
+          dayEarliestStartMin = 15 * 60 + 30; // 15:30
+        } else if (schoolEnd.endTime >= '14:30') {
+          dayEarliestStartMin = 14 * 60 + 45; // 14:45
+        } else {
+          dayEarliestStartMin = 14 * 60; // 14:00
+        }
+      }
+
+      // Pokud je den dnešní, kontrolujeme aktuální čas (začátek nemůže být v minulosti)
+      if (isSameDay(d, now)) {
+        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+        if (nowMinutes > dayEarliestStartMin) {
+          // Zaokrouhlíme nahoru na nejbližších 15 minut
+          dayEarliestStartMin = Math.ceil(nowMinutes / 15) * 15;
+        }
+      }
+
+      // Pokud nejčasnější možný začátek + 60 min přesahuje hardEnd, v tento den už nelze nic stihnout
+      if (dayEarliestStartMin + 60 > hardEndMinute) continue;
+
+      // Najdeme všechny existující události pro daný den s časem a seřadíme je
+      const dayBusyIntervals: { start: number; end: number }[] = events
+        .filter(e => e.date === dStr && !!e.startTime && e.id !== cancelModalEvent?.id)
+        .map(e => {
+          const s = toMinutes(e.startTime!);
+          const eMin = e.endTime ? toMinutes(e.endTime) : s + 60;
+          return { start: s, end: eMin };
+        })
+        .filter(int => int.end > dayEarliestStartMin && int.start < hardEndMinute)
+        .sort((a, b) => a.start - b.start);
+
+      // Sloučíme případné překrývající se busy intervaly
+      const mergedBusy: { start: number; end: number }[] = [];
+      for (const cur of dayBusyIntervals) {
+        if (mergedBusy.length === 0) {
+          mergedBusy.push({ ...cur });
+        } else {
+          const last = mergedBusy[mergedBusy.length - 1];
+          if (cur.start <= last.end) {
+            last.end = Math.max(last.end, cur.end);
+          } else {
+            mergedBusy.push({ ...cur });
+          }
+        }
+      }
+
+      // Hledáme volné intervaly mezi dayEarliestStartMin a hardEndMinute
+      let pointer = dayEarliestStartMin;
+      for (const busy of mergedBusy) {
+        if (busy.start > pointer) {
+          const freeStart = pointer;
+          const freeEnd = Math.min(busy.start, hardEndMinute);
+          if (freeEnd - freeStart >= 60) {
+            // Určíme povolená místa pro tento blok
+            const places: ('library' | 'office')[] = [];
+            if (tutType === 'company') {
+              places.push('office');
+              if (freeStart < 18 * 60) {
+                places.push('library');
+              }
+            } else {
+              // Soukromé může být jen v knihovně
+              places.push('library');
+            }
+
+            const dayName = format(d, 'EEEE d. M.', { locale: cs });
+            blocks.push({
+              date: dStr,
+              startTime: toTimeStr(freeStart),
+              endTime: toTimeStr(freeEnd),
+              startMin: freeStart,
+              endMin: freeEnd,
+              dayLabel: dayName,
+              label: `${dayName}: ${toTimeStr(freeStart)} – ${toTimeStr(freeEnd)} (${Math.round((freeEnd - freeStart) / 60 * 10) / 10} h volno)`,
+              allowedPlaces: places
+            });
+          }
+        }
+        pointer = Math.max(pointer, busy.end);
+      }
+
+      // Zbývající volný čas do hardEndMinute
+      if (pointer < hardEndMinute) {
+        const freeStart = pointer;
+        const freeEnd = hardEndMinute;
+        if (freeEnd - freeStart >= 60) {
+          const places: ('library' | 'office')[] = [];
+          if (tutType === 'company') {
+            places.push('office');
+            if (freeStart < 18 * 60) {
+              places.push('library');
+            }
+          } else {
+            places.push('library');
+          }
+
+          const dayName = format(d, 'EEEE d. M.', { locale: cs });
+          blocks.push({
             date: dStr,
-            startTime: t.start,
-            endTime: t.end,
-            label: `${format(d, 'EEEE d. M.', { locale: cs })} v ${t.start} – ${t.end}`
+            startTime: toTimeStr(freeStart),
+            endTime: toTimeStr(freeEnd),
+            startMin: freeStart,
+            endMin: freeEnd,
+            dayLabel: dayName,
+            label: `${dayName}: ${toTimeStr(freeStart)} – ${toTimeStr(freeEnd)} (${Math.round((freeEnd - freeStart) / 60 * 10) / 10} h volno)`,
+            allowedPlaces: places
           });
         }
       }
     }
 
-    return slots;
+    return blocks;
   };
 
   // Akce 1: Zrušit hodinu bez náhrady (nenahrazovat)
@@ -750,10 +898,36 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   };
 
   // Akce 3: Zrušit hodinu a rovnou vybrat náhradní termín
-  const handleScheduleCompensation = async (ev: CalendarEvent, targetDate: string, sTime: string, eTime: string, compIdToRemove?: string) => {
+  const handleScheduleCompensation = async (
+    ev: CalendarEvent, 
+    targetDate: string, 
+    sTime: string, 
+    eTime: string, 
+    chosenPlace?: TutoringPlace, 
+    compIdToRemove?: string
+  ) => {
     if (!currentUser || !ev.tutoring) return;
+
+    const tut = ev.tutoring;
+    const finalPlace = chosenPlace || tut.place || 'library';
+
+    // Kontrola: cokoliv končí později než 18:00, musí být v kanclu
+    if (eTime > '18:00' && finalPlace !== 'office') {
+      alert('Knihovna zavírá v 18:00. Lekce končící po 18:00 musí probíhat v kanclu!');
+      return;
+    }
+
+    // Upozornění před uložením jakékoliv náhradní hodiny v kanclu
+    if (finalPlace === 'office') {
+      const confirmOffice = window.confirm(
+        '⚠️ UPOZORNĚNÍ NA KANCL:\nTato náhradní hodina bude probíhat v kanclu. Nejdříve se prosím podívejte, jestli je tam volno!\n\nChcete pokračovat a hodinu uložit?'
+      );
+      if (!confirmOffice) {
+        return;
+      }
+    }
+
     try {
-      const tut = ev.tutoring;
       const finalColor = mapColorNameToKey(tut.studentColor);
 
       // Pokud byla lekce v kalendáři a teprve ji rušíme, smažeme původní
@@ -779,7 +953,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
         tutoring: {
           studentColor: tut.studentColor,
           type: tut.type,
-          place: tut.place,
+          place: finalPlace,
           goal: tut.goal,
           subject: tut.subject,
           sequencePattern: tut.sequencePattern,
@@ -798,7 +972,8 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
       setCancelModalEvent(null);
       setViewingEvent(null);
       setShowReschedulePicker(false);
-      alert(`Náhradní hodina pro studenta ${tut.studentColor} byla úspěšně naplánována na ${format(new Date(targetDate + 'T12:00:00'), 'd. M. yyyy')} v ${sTime}!`);
+      setSelectedCompensationBlock(null);
+      alert(`Náhradní hodina pro studenta ${tut.studentColor} byla úspěšně naplánována na ${format(new Date(targetDate + 'T12:00:00'), 'd. M. yyyy')} v ${sTime} (${finalPlace === 'office' ? 'Kancl' : 'Knihovna'})!`);
     } catch (err) {
       console.error(err);
       alert('Chyba při plánování náhrady.');
@@ -1878,7 +2053,28 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
       {cancelModalEvent && (() => {
         const ev = cancelModalEvent;
         const tut = ev.tutoring;
-        const availableSlots = tut ? findAvailableSlotsForCompensation(tut.studentColor) : [];
+        const availableBlocks = tut ? findAvailableBlocksForCompensation(tut.studentColor, tut.type) : [];
+
+        // Pomocné funkce pro minuty a formátování
+        const toMin = (t: string) => {
+          const [h, m] = t.split(':').map(Number);
+          return h * 60 + m;
+        };
+        const toTimeStr = (total: number) => {
+          const h = Math.floor(total / 60);
+          const m = total % 60;
+          return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        };
+
+        // Generování možných začátků v rámci vybraného bloku
+        const generatePossibleStarts = (block: typeof selectedCompensationBlock, duration: number) => {
+          if (!block) return [];
+          const list: string[] = [];
+          for (let m = block.startMin; m + duration <= block.endMin; m += 15) {
+            list.push(toTimeStr(m));
+          }
+          return list;
+        };
 
         return (
           <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
@@ -1894,6 +2090,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                   onClick={() => {
                     setCancelModalEvent(null);
                     setShowReschedulePicker(false);
+                    setSelectedCompensationBlock(null);
                   }}
                   className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
                 >
@@ -1931,16 +2128,19 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
 
                     <button
                       type="button"
-                      onClick={() => setShowReschedulePicker(true)}
+                      onClick={() => {
+                        setShowReschedulePicker(true);
+                        setSelectedCompensationBlock(null);
+                      }}
                       className="w-full p-3.5 rounded-2xl border border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 transition cursor-pointer text-left flex items-start gap-3 group"
                     >
                       <div className="p-2 rounded-xl bg-indigo-100 text-indigo-700 group-hover:bg-indigo-200 transition">
                         <CalendarIcon className="w-4 h-4" />
                       </div>
                       <div>
-                        <div className="text-xs font-bold text-indigo-950">Nahradit hned (vybrat volný termín)</div>
+                        <div className="text-xs font-bold text-indigo-950">Nahradit hned (vybrat volný časový blok)</div>
                         <p className="text-[11px] text-indigo-800/80">
-                          Zobrazí volné termíny v tomto a příštím týdnu, kdy nemáte jiný program a student v ten den nemá hodinu.
+                          Zobrazí volné časové bloky v tomto a příštím týdnu podle konce vaší školy a otevírací doby knihovny/kanclu.
                         </p>
                       </div>
                     </button>
@@ -1961,12 +2161,12 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                       </div>
                     </button>
                   </div>
-                ) : (
-                  /* Výběr volného termínu pro náhradu */
+                ) : !selectedCompensationBlock ? (
+                  /* KROK 1: Výběr volného časového bloku */
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-indigo-950 uppercase tracking-wider">
-                        Volné termíny v tomto a příštím týdnu:
+                        Volné časové bloky v tomto a příštím týdnu:
                       </span>
                       <button
                         type="button"
@@ -1978,29 +2178,46 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                     </div>
 
                     <p className="text-[11px] text-slate-500">
-                      Zobrazeny jsou časy s alespoň 60 min volna, kdy student {tut?.studentColor} v daný den nemá jinou lekci.
+                      Bloky zohledňují konec vaší školy (odpoledne) i limit knihovny (18:00) / kanclu (19:00). Vyberte blok a poté upřesníte čas.
                     </p>
 
-                    <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
-                      {availableSlots.length > 0 ? (
-                        availableSlots.map((slot, idx) => (
+                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                      {availableBlocks.length > 0 ? (
+                        availableBlocks.map((blk, idx) => (
                           <button
                             key={idx}
                             type="button"
-                            onClick={() => handleScheduleCompensation(ev, slot.date, slot.startTime, slot.endTime)}
-                            className="w-full p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 transition cursor-pointer text-left flex items-center justify-between text-xs group"
+                            onClick={() => {
+                              setSelectedCompensationBlock(blk);
+                              setCompensationChosenStart(blk.startTime);
+                              setCompensationDuration(60);
+                              // Pokud blok končí po 18:00 nebo začíná po 17:00 pro 60m lekci
+                              const defEnd = toTimeStr(blk.startMin + 60);
+                              const mustOffice = defEnd > '18:00';
+                              setCompensationChosenPlace(mustOffice ? 'office' : (tut?.place || 'library'));
+                            }}
+                            className="w-full p-3 rounded-2xl border border-slate-200 bg-white hover:bg-indigo-50/70 hover:border-indigo-300 transition cursor-pointer text-left flex items-center justify-between text-xs group shadow-2xs"
                           >
-                            <span className="font-semibold text-slate-800 group-hover:text-indigo-900 capitalize">
-                              {slot.label}
-                            </span>
-                            <span className="text-[10px] font-bold text-indigo-600 opacity-0 group-hover:opacity-100 transition">
-                              Vybrat termín ➔
+                            <div>
+                              <div className="font-extrabold text-slate-800 group-hover:text-indigo-900 capitalize text-xs">
+                                {blk.dayLabel}
+                              </div>
+                              <div className="text-[11px] text-indigo-700 font-semibold mt-0.5 flex items-center gap-1.5">
+                                <Clock className="w-3.5 h-3.5" />
+                                <span>{blk.startTime} – {blk.endTime}</span>
+                                <span className="text-[10px] text-slate-400 font-normal">
+                                  ({Math.round((blk.endMin - blk.startMin) / 60 * 10) / 10} h volno)
+                                </span>
+                              </div>
+                            </div>
+                            <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-xl group-hover:bg-indigo-600 group-hover:text-white transition">
+                              Vybrat blok ➔
                             </span>
                           </button>
                         ))
                       ) : (
                         <div className="p-4 rounded-xl bg-slate-50 text-center text-xs text-slate-500">
-                          V tomto ani příštím týdnu nebyl nalezen žádný zcela volný termín bez kolize.
+                          V tomto ani příštím týdnu nebyl nalezen žádný volný blok o délce alespoň 60 minut.
                         </div>
                       )}
                     </div>
@@ -2015,6 +2232,179 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                       </button>
                     </div>
                   </div>
+                ) : (
+                  /* KROK 2: Upřesnění času v rámci vybraného časového bloku */
+                  <div className="space-y-4 animate-in fade-in duration-150">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                      <div>
+                        <span className="text-[11px] uppercase tracking-wider text-slate-400 font-extrabold block">
+                          Zvolený volný blok
+                        </span>
+                        <div className="text-sm font-extrabold text-indigo-950 capitalize">
+                          {selectedCompensationBlock.dayLabel} ({selectedCompensationBlock.startTime} – {selectedCompensationBlock.endTime})
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCompensationBlock(null)}
+                        className="text-xs text-indigo-600 hover:underline font-bold cursor-pointer"
+                      >
+                        Změnit blok
+                      </button>
+                    </div>
+
+                    {/* Nastavení délky lekce a začátku */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Délka lekce
+                        </label>
+                        <select
+                          value={compensationDuration}
+                          onChange={(e) => {
+                            const newDur = Number(e.target.value);
+                            setCompensationDuration(newDur);
+                            // Zkontrolujeme, zda stávající start + nová délka nepřekračují konec bloku
+                            const curStartMin = toMin(compensationChosenStart);
+                            if (curStartMin + newDur > selectedCompensationBlock.endMin) {
+                              const adjustedStart = selectedCompensationBlock.endMin - newDur;
+                              setCompensationChosenStart(toTimeStr(adjustedStart));
+                            }
+                          }}
+                          className="w-full text-xs font-semibold p-2 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value={45}>45 minut</option>
+                          <option value={60}>60 minut (1 hodina)</option>
+                          {selectedCompensationBlock.endMin - selectedCompensationBlock.startMin >= 75 && (
+                            <option value={75}>75 minut</option>
+                          )}
+                          {selectedCompensationBlock.endMin - selectedCompensationBlock.startMin >= 90 && (
+                            <option value={90}>90 minut (1,5 hodiny)</option>
+                          )}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Začátek hodiny
+                        </label>
+                        <select
+                          value={compensationChosenStart}
+                          onChange={(e) => {
+                            const newStart = e.target.value;
+                            setCompensationChosenStart(newStart);
+                            // Pokud konec přesahuje 18:00, automaticky přepneme na kancl
+                            const endMin = toMin(newStart) + compensationDuration;
+                            if (endMin > 18 * 60) {
+                              setCompensationChosenPlace('office');
+                            }
+                          }}
+                          className="w-full text-xs font-semibold p-2 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500"
+                        >
+                          {generatePossibleStarts(selectedCompensationBlock, compensationDuration).map(t => {
+                            const endMin = toMin(t) + compensationDuration;
+                            return (
+                              <option key={t} value={t}>
+                                {t} (do {toTimeStr(endMin)})
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Výběr místa */}
+                    {(() => {
+                      const curEndMin = toMin(compensationChosenStart || selectedCompensationBlock.startTime) + compensationDuration;
+                      const curEndStr = toTimeStr(curEndMin);
+                      const endsAfter18 = curEndStr > '18:00';
+                      const isCompany = tut?.type === 'company';
+
+                      return (
+                        <div className="space-y-2 pt-1">
+                          <label className="block text-xs font-bold text-slate-700">
+                            Místo konání lekce
+                          </label>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              disabled={endsAfter18}
+                              onClick={() => setCompensationChosenPlace('library')}
+                              className={`p-2.5 rounded-xl border text-xs font-bold transition flex flex-col items-center justify-center gap-1 cursor-pointer ${
+                                compensationChosenPlace === 'library'
+                                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                                  : endsAfter18
+                                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed line-through'
+                                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                              }`}
+                            >
+                              <span>Knihovna</span>
+                              <span className="text-[10px] font-normal opacity-80">(do 18:00)</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={!isCompany}
+                              onClick={() => setCompensationChosenPlace('office')}
+                              className={`p-2.5 rounded-xl border text-xs font-bold transition flex flex-col items-center justify-center gap-1 cursor-pointer ${
+                                compensationChosenPlace === 'office'
+                                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                                  : !isCompany
+                                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed line-through'
+                                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                              }`}
+                            >
+                              <span>Kancl</span>
+                              <span className="text-[10px] font-normal opacity-80">(do 19:00)</span>
+                            </button>
+                          </div>
+
+                          {endsAfter18 && (
+                            <div className="flex items-center gap-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[11px] font-medium">
+                              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                              <span>Hodina končí po 18:00 (kdy knihovna zavírá), proto musí proběhnout v kanclu.</span>
+                            </div>
+                          )}
+
+                          {compensationChosenPlace === 'office' && (
+                            <div className="flex items-center gap-2 p-2.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 text-[11px] font-medium">
+                              <MapPin className="w-4 h-4 text-indigo-600 shrink-0" />
+                              <span>Před uložením vás systém vyzve, abyste zkontrolovali obsazenost kanclu.</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    {/* Tlačítko pro potvrzení a naplánování */}
+                    {(() => {
+                      const curStart = compensationChosenStart || selectedCompensationBlock.startTime;
+                      const curEnd = toTimeStr(toMin(curStart) + compensationDuration);
+                      const isOffice = compensationChosenPlace === 'office';
+
+                      return (
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleScheduleCompensation(
+                                ev,
+                                selectedCompensationBlock.date,
+                                curStart,
+                                curEnd,
+                                compensationChosenPlace
+                              );
+                            }}
+                            className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-2xl text-xs shadow-md transition cursor-pointer flex items-center justify-center gap-2"
+                          >
+                            <span>Naplánovat na {curStart} – {curEnd} ({isOffice ? 'Kancl' : 'Knihovna'})</span>
+                            <span>➔</span>
+                          </button>
+                        </div>
+                      );
+                    })()}
+                  </div>
                 )}
               </div>
 
@@ -2024,6 +2414,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                   onClick={() => {
                     setCancelModalEvent(null);
                     setShowReschedulePicker(false);
+                    setSelectedCompensationBlock(null);
                   }}
                   className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-xl text-xs font-semibold transition cursor-pointer"
                 >
