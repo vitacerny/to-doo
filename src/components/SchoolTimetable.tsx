@@ -299,10 +299,6 @@ export const SchoolTimetable: React.FC = () => {
               </div>
               <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
                 <span>Platnost pro: <strong>{substitutionData?.date || 'Načítání...'}</strong></span>
-                <span>•</span>
-                <span className="text-[11px] text-slate-400">
-                  Pouze vaše skupina v 8.A (AJ skupina HV s p. Fejtem, vynechána skupina VV)
-                </span>
               </div>
             </div>
           </div>
