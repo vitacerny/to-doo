@@ -576,6 +576,43 @@ export const SchoolTimetable: React.FC = () => {
                       const hasOralExam = lessonEvents.some(ev => ev.type === 'oral_exam');
                       const hasHomework = lessonEvents.some(ev => ev.type === 'homework' && !ev.isDone);
 
+                      // Pokud hodina odpadá, nezobrazujeme její detaily (předmět, učitele, učebnu),
+                      // pouze vizuální indikaci, že v tomto místě odpadla hodina.
+                      if (isCancelled) {
+                        return (
+                          <td 
+                            key={period.period} 
+                            className="p-1 border-r border-slate-100 last:border-r-0 align-middle"
+                          >
+                            <div
+                              onClick={() => {
+                                setShowAddEventForm(false);
+                                setNewEventTitle('');
+                                setNewEventType('exam');
+                                setNewStudyIntensity('commute_school');
+                                setNewEventNote('');
+                                setActiveLessonModal({
+                                  lesson: activeLesson,
+                                  period,
+                                  dayName: day.name,
+                                  date: day.date,
+                                  dateStr: format(day.date, 'd. M. yyyy'),
+                                  isoDate: dayIso,
+                                  substitution: matchedChange
+                                });
+                              }}
+                              className="relative h-16 p-1 rounded-xl border border-dashed border-red-200 bg-red-50/50 hover:bg-red-50/80 transition cursor-pointer flex flex-col items-center justify-center text-center group"
+                              title="V tomto místě odpadla hodina (kliknutím zobrazíte detail suplování)"
+                            >
+                              <span className="w-2 h-2 rounded-full bg-red-400 mb-1 opacity-70 group-hover:scale-110 transition-transform" />
+                              <span className="text-[10px] font-bold text-red-500 uppercase tracking-tight">
+                                Odpadlo
+                              </span>
+                            </div>
+                          </td>
+                        );
+                      }
+
                       return (
                         <td 
                           key={period.period} 
@@ -599,7 +636,7 @@ export const SchoolTimetable: React.FC = () => {
                               });
                             }}
                             className={`relative h-16 p-1.5 rounded-xl border transition cursor-pointer hover:shadow-xs hover:scale-[1.02] flex flex-col justify-between ${cellStyle.bg} ${cellStyle.border} ${cellStyle.text}`}
-                            title={isCancelled ? `${activeLesson.subject} ODPADÁ!` : `${activeLesson.subject} (${activeLesson.teacher}, učebna ${activeLesson.room})`}
+                            title={`${activeLesson.subject} (${activeLesson.teacher}, učebna ${activeLesson.room})`}
                           >
                             {/* Odznáček změny / odpadnutí */}
                             {isCancelled && (
