@@ -6,8 +6,6 @@ import {
   updateCalendarEvent, 
   deleteCalendarEvent,
   rebalanceTutoringSeries,
-  markTutoringAsContinuousForStudent,
-  ensureWednesdayLessonForRedStudent,
   getLocalPendingCompensations,
   addPendingCompensation,
   removePendingCompensation
@@ -230,11 +228,9 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const [customUntilDate, setCustomUntilDate] = useState('2027-04-12');
   const [customWeeks, setCustomWeeks] = useState(8);
 
-  // Při prvním načtení automaticky označíme existující lekce studenta modrá jako průběžná a zajistíme středeční hodinu M pro červenou
+  // Při prvním načtení synchronizujeme pending kompenzace
   useEffect(() => {
     if (currentUser) {
-      markTutoringAsContinuousForStudent(currentUser.uid, 'modrá');
-      ensureWednesdayLessonForRedStudent(currentUser.uid);
       setPendingCompensations(getLocalPendingCompensations(currentUser.uid));
 
       const handleCompChange = () => {
