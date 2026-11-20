@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { format, addWeeks, subWeeks, startOfWeek, endOfWeek, isSameDay } from 'date-fns';
 import { cs } from 'date-fns/locale';
 import { 
@@ -10,8 +10,19 @@ import {
   User, 
   Calendar as CalendarIcon,
   Sparkles,
-  Info
+  Info,
+  RefreshCw,
+  AlertCircle,
+  CheckCircle2,
+  ExternalLink,
+  ShieldCheck,
+  Ban
 } from 'lucide-react';
+import { 
+  fetchLiveSuplovani, 
+  DailySubstitutionResult, 
+  SchoolSubstitutionChange 
+} from '../services/suplovaniService';
 
 export interface LessonPeriod {
   period: number;
@@ -145,7 +156,29 @@ export const SchoolTimetable: React.FC = () => {
     period: LessonPeriod;
     dayName: string;
     dateStr: string;
+    substitution?: SchoolSubstitutionChange;
   } | null>(null);
+
+  // Stav pro online suplování z ghb.bakalari.cz
+  const [substitutionData, setSubstitutionData] = useState<DailySubstitutionResult | null>(null);
+  const [isLoadingSuplovani, setIsLoadingSuplovani] = useState<boolean>(false);
+  const [showAllClassChanges, setShowAllClassChanges] = useState<boolean>(false);
+
+  const loadSuplovani = async () => {
+    setIsLoadingSuplovani(true);
+    try {
+      const data = await fetchLiveSuplovani();
+      setSubstitutionData(data);
+    } catch (e) {
+      console.error('Chyba při načítání suplování:', e);
+    } finally {
+      setIsLoadingSuplovani(false);
+    }
+  };
+
+  useEffect(() => {
+    loadSuplovani();
+  }, []);
 
   const weekStart = startOfWeek(selectedDate, { weekStartsOn: 1 });
   const weekEnd = endOfWeek(selectedDate, { weekStartsOn: 1 });
@@ -242,6 +275,115 @@ export const SchoolTimetable: React.FC = () => {
         </div>
       </div>
 
+      {/* Banner online suplování GHB */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-sm space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center">
+              <AlertCircle className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-extrabold text-sm text-slate-900">
+                  Suplování a změny v rozvrhu (ghb.cz)
+                </span>
+                {substitutionData && (
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    substitutionData.source === 'live' 
+                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      : 'bg-slate-100 text-slate-600 border border-slate-200'
+                  }`}>
+                    {substitutionData.source === 'live' ? 'Online z Bakalářů' : 'Poslední načtená data'}
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
+                <span>Platnost pro: <strong>{substitutionData?.date || 'Načítání...'}</strong></span>
+                <span>•</span>
+                <span className="text-[11px] text-slate-400">
+                  Pouze vaše skupina v 8.A (AJ skupina HV s p. Fejtem, vynechána skupina VV)
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <button
+              onClick={() => setShowAllClassChanges(prev => !prev)}
+              className="px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition cursor-pointer"
+            >
+              {showAllClassChanges ? 'Zobrazit jen moje' : 'Všechny změny 8.A'}
+            </button>
+            <button
+              onClick={loadSuplovani}
+              disabled={isLoadingSuplovani}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl transition cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSuplovani ? 'animate-spin' : ''}`} />
+              <span>{isLoadingSuplovani ? 'Načítání...' : 'Aktualizovat'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Přehled změn pro studenta na dnešek / načtený den */}
+        {substitutionData && (
+          <div className="pt-2 border-t border-slate-100">
+            {(() => {
+              const displayChanges = showAllClassChanges 
+                ? substitutionData.classChanges 
+                : substitutionData.userChanges;
+
+              if (displayChanges.length === 0) {
+                return (
+                  <div className="flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50/70 border border-emerald-200 rounded-xl px-3 py-2">
+                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+                    <span>Žádné změny ani odpadlé hodiny pro vás v tento den nejsou hlášeny (výuka probíhá beze změn).</span>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="space-y-1.5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    {showAllClassChanges ? 'Všechny hlášené změny třídy 8.A:' : 'Změny týkající se přímo vás:'}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {displayChanges.map((ch, idx) => {
+                      const isCancelled = ch.changeType.toLowerCase().includes('odpadá') || ch.changeType.toLowerCase().includes('zrušeno');
+                      return (
+                        <div 
+                          key={idx}
+                          className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-semibold ${
+                            isCancelled 
+                              ? 'bg-red-50 border-red-200 text-red-900' 
+                              : 'bg-amber-50 border-amber-200 text-amber-900'
+                          }`}
+                        >
+                          <span className={`w-2 h-2 rounded-full ${isCancelled ? 'bg-red-500' : 'bg-amber-500'}`} />
+                          <span className="font-extrabold">{ch.period}. hod</span>
+                          <span className="px-1.5 py-0.5 rounded bg-white font-mono font-bold text-slate-800 shadow-2xs">
+                            {ch.subject} {ch.group ? `(${ch.group})` : ''}
+                          </span>
+                          <span className="font-bold uppercase text-[10px] tracking-wide">
+                            {ch.changeType}
+                          </span>
+                          {ch.originalTeacher && (
+                            <span className="opacity-75">({ch.originalTeacher})</span>
+                          )}
+                          {ch.substitute && (
+                            <span className="font-bold text-indigo-700">➜ {ch.substitute}</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </div>
+
       {/* Banner o aktivním střídání pro tento týden */}
       <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-2.5 text-indigo-950">
@@ -323,11 +465,43 @@ export const SchoolTimetable: React.FC = () => {
                         );
                       }
 
-                      const style = SUBJECT_STYLES[activeLesson.subject] || {
+                      // Zkontrolujeme, zda pro tuto lekci existuje záznam v suplování
+                      // Pozn.: Změny v suplování jsou pro konkrétní den (např. 20.11.2026)
+                      const formattedDayDate = format(day.date, 'd.M.yyyy').replace(/\s+/g, '');
+                      const subDateClean = (substitutionData?.date || '').replace(/\s+/g, '');
+                      const isSubDateMatchingDay = subDateClean.includes(formattedDayDate);
+
+                      // Hledáme suplování pro danou hodinu a předmět, které se týká studenta
+                      const matchedChange = isSubDateMatchingDay ? substitutionData?.userChanges.find(ch => {
+                        if (ch.period !== period.period) return false;
+                        if (ch.subject.toUpperCase() !== activeLesson.subject.toUpperCase()) return false;
+                        return true;
+                      }) : undefined;
+
+                      const isCancelled = matchedChange && (
+                        matchedChange.changeType.toLowerCase().includes('odpadá') || 
+                        matchedChange.changeType.toLowerCase().includes('zrušeno')
+                      );
+
+                      const isSubstituted = matchedChange && !isCancelled && (
+                        matchedChange.changeType.toLowerCase().includes('supl') || 
+                        matchedChange.substitute
+                      );
+
+                      const isRoomChanged = matchedChange && !isCancelled && matchedChange.room && matchedChange.room !== activeLesson.room;
+
+                      const defaultStyle = SUBJECT_STYLES[activeLesson.subject] || {
                         bg: 'bg-indigo-50',
                         text: 'text-indigo-800',
                         border: 'border-indigo-200'
                       };
+
+                      // Vzhled buňky při odpadnutí či změně
+                      const cellStyle = isCancelled
+                        ? { bg: 'bg-red-50/90', text: 'text-red-900', border: 'border-red-300' }
+                        : isSubstituted
+                        ? { bg: 'bg-amber-50/90', text: 'text-amber-900', border: 'border-amber-300' }
+                        : defaultStyle;
 
                       return (
                         <td 
@@ -339,25 +513,45 @@ export const SchoolTimetable: React.FC = () => {
                               lesson: activeLesson,
                               period,
                               dayName: day.name,
-                              dateStr: format(day.date, 'd. M. yyyy')
+                              dateStr: format(day.date, 'd. M. yyyy'),
+                              substitution: matchedChange
                             })}
-                            className={`h-16 p-1.5 rounded-xl border transition cursor-pointer hover:shadow-xs hover:scale-[1.02] flex flex-col justify-between ${style.bg} ${style.border} ${style.text}`}
-                            title={`${activeLesson.subject} (${activeLesson.teacher}, učebna ${activeLesson.room})`}
+                            className={`relative h-16 p-1.5 rounded-xl border transition cursor-pointer hover:shadow-xs hover:scale-[1.02] flex flex-col justify-between ${cellStyle.bg} ${cellStyle.border} ${cellStyle.text}`}
+                            title={isCancelled ? `${activeLesson.subject} ODPADÁ!` : `${activeLesson.subject} (${activeLesson.teacher}, učebna ${activeLesson.room})`}
                           >
+                            {/* Odznáček změny / odpadnutí */}
+                            {isCancelled && (
+                              <div className="absolute -top-1.5 -right-1 px-1.5 py-0.2 rounded-full bg-red-600 text-white font-extrabold text-[8px] uppercase tracking-wider shadow-xs">
+                                Odpadá
+                              </div>
+                            )}
+
+                            {isSubstituted && (
+                              <div className="absolute -top-1.5 -right-1 px-1.5 py-0.2 rounded-full bg-amber-600 text-white font-extrabold text-[8px] uppercase tracking-wider shadow-xs">
+                                Supl
+                              </div>
+                            )}
+
                             {/* Horní řádek: Skupina a Místnost */}
                             <div className="flex items-center justify-between text-[9px] font-bold opacity-75">
                               <span className="truncate max-w-[36px]">{activeLesson.group || ''}</span>
-                              <span className="font-mono">{activeLesson.room}</span>
+                              <span className={`font-mono ${isRoomChanged ? 'text-amber-700 underline font-extrabold' : ''}`}>
+                                {isRoomChanged ? matchedChange?.room : activeLesson.room}
+                              </span>
                             </div>
 
                             {/* Střed: Zkratka předmětu */}
-                            <div className="text-center font-extrabold text-sm tracking-tight">
+                            <div className={`text-center font-extrabold text-sm tracking-tight ${isCancelled ? 'line-through opacity-70' : ''}`}>
                               {activeLesson.subject}
                             </div>
 
                             {/* Dolní řádek: Vyučující a případný badge S/L */}
                             <div className="flex items-center justify-between text-[9px] font-semibold opacity-80">
-                              <span>{activeLesson.teacher}</span>
+                              <span className={isSubstituted ? 'font-extrabold text-amber-800' : ''}>
+                                {isSubstituted && matchedChange?.substitute 
+                                  ? matchedChange.substitute 
+                                  : isCancelled ? '(odpadá)' : activeLesson.teacher}
+                              </span>
                               {activeLesson.weekType && (
                                 <span className={`px-1 rounded text-[8px] font-bold uppercase ${
                                   activeLesson.weekType === 'even' 
@@ -382,17 +576,22 @@ export const SchoolTimetable: React.FC = () => {
 
       {/* DETAIL MODAL HODINY */}
       {activeLessonModal && (() => {
-        const { lesson, period, dayName, dateStr } = activeLessonModal;
+        const { lesson, period, dayName, dateStr, substitution } = activeLessonModal;
         const style = SUBJECT_STYLES[lesson.subject] || {
           bg: 'bg-indigo-50',
           text: 'text-indigo-800',
           border: 'border-indigo-200'
         };
 
+        const isCancelled = substitution && (
+          substitution.changeType.toLowerCase().includes('odpadá') || 
+          substitution.changeType.toLowerCase().includes('zrušeno')
+        );
+
         return (
           <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
             <div className="bg-white rounded-3xl max-w-sm w-full shadow-2xl border border-slate-200 overflow-hidden">
-              <div className={`p-6 border-b ${style.bg} ${style.border}`}>
+              <div className={`p-6 border-b ${isCancelled ? 'bg-red-50 border-red-200 text-red-950' : `${style.bg} ${style.border}`}`}>
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold uppercase tracking-wider opacity-70">
                     {dayName}, {dateStr}
@@ -401,7 +600,7 @@ export const SchoolTimetable: React.FC = () => {
                     {period.period}. hodina
                   </span>
                 </div>
-                <h3 className="text-3xl font-extrabold mt-2 tracking-tight text-slate-900">
+                <h3 className={`text-3xl font-extrabold mt-2 tracking-tight ${isCancelled ? 'line-through text-red-900' : 'text-slate-900'}`}>
                   {lesson.subject}
                 </h3>
                 <div className="flex items-center gap-1.5 text-xs font-bold text-slate-600 mt-1">
@@ -410,13 +609,47 @@ export const SchoolTimetable: React.FC = () => {
                 </div>
               </div>
 
+              {/* Informace o suplování v modalu */}
+              {substitution && (
+                <div className={`p-4 border-b text-xs ${
+                  isCancelled 
+                    ? 'bg-red-100/60 border-red-200 text-red-950' 
+                    : 'bg-amber-100/60 border-amber-200 text-amber-950'
+                }`}>
+                  <div className="flex items-center gap-2 font-bold mb-1">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Změna z Bakalářů ({substitution.changeType})</span>
+                  </div>
+                  {isCancelled ? (
+                    <p className="text-[11px] font-medium leading-relaxed">
+                      Tato vyučovací hodina podle dnešního suplování na GHB <strong>odpadá</strong> (vyučující {substitution.originalTeacher || lesson.teacher}).
+                    </p>
+                  ) : (
+                    <p className="text-[11px] font-medium leading-relaxed">
+                      {substitution.substitute && (
+                        <span>Supluje: <strong>{substitution.substitute}</strong> (původně {substitution.originalTeacher || lesson.teacher}). </span>
+                      )}
+                      {substitution.room && (
+                        <span>Nová učebna: <strong>{substitution.room}</strong>. </span>
+                      )}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="p-6 space-y-3 text-xs">
                 <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100">
                   <span className="font-bold text-slate-500 flex items-center gap-1.5">
                     <User className="w-3.5 h-3.5 text-slate-400" />
                     Vyučující:
                   </span>
-                  <span className="font-extrabold text-slate-800 text-sm">{lesson.teacher}</span>
+                  <span className="font-extrabold text-slate-800 text-sm">
+                    {substitution?.substitute ? (
+                      <span>{substitution.substitute} <span className="text-xs font-normal text-slate-400 line-through">({lesson.teacher})</span></span>
+                    ) : (
+                      lesson.teacher
+                    )}
+                  </span>
                 </div>
 
                 <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100">
@@ -424,7 +657,9 @@ export const SchoolTimetable: React.FC = () => {
                     <MapPin className="w-3.5 h-3.5 text-slate-400" />
                     Učebna:
                   </span>
-                  <span className="font-extrabold text-indigo-700 text-sm font-mono">{lesson.room}</span>
+                  <span className="font-extrabold text-indigo-700 text-sm font-mono">
+                    {substitution?.room || lesson.room}
+                  </span>
                 </div>
 
                 {lesson.group && (

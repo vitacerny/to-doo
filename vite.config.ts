@@ -8,6 +8,13 @@ export default defineConfig({
       usePolling: true,
       interval: 1000,
     },
+    proxy: {
+      '/api-suplovani': {
+        target: 'https://ghb.bakalari.cz',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api-suplovani/, '/next/zmeny.aspx')
+      }
+    }
   },
   plugins: [
     react(),
