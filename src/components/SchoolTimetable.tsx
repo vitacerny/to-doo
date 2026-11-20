@@ -27,7 +27,8 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { 
   SchoolLessonEvent, 
-  SchoolEventItemType 
+  SchoolEventItemType,
+  StudyIntensity 
 } from '../types';
 import { 
   subscribeSchoolEvents, 
@@ -187,6 +188,7 @@ export const SchoolTimetable: React.FC = () => {
   const [showAddEventForm, setShowAddEventForm] = useState<boolean>(false);
   const [newEventTitle, setNewEventTitle] = useState<string>('');
   const [newEventType, setNewEventType] = useState<SchoolEventItemType>('exam');
+  const [newStudyIntensity, setNewStudyIntensity] = useState<StudyIntensity>('commute_school');
   const [newEventNote, setNewEventNote] = useState<string>('');
 
   useEffect(() => {
@@ -584,6 +586,7 @@ export const SchoolTimetable: React.FC = () => {
                               setShowAddEventForm(false);
                               setNewEventTitle('');
                               setNewEventType('exam');
+                              setNewStudyIntensity('commute_school');
                               setNewEventNote('');
                               setActiveLessonModal({
                                 lesson: activeLesson,
@@ -705,6 +708,7 @@ export const SchoolTimetable: React.FC = () => {
             period: period.period,
             subject: lesson.subject,
             type: newEventType,
+            studyIntensity: newEventType === 'exam' ? newStudyIntensity : undefined,
             title: newEventTitle.trim(),
             note: newEventNote.trim() || undefined,
             isDone: false
@@ -712,6 +716,7 @@ export const SchoolTimetable: React.FC = () => {
 
           setNewEventTitle('');
           setNewEventNote('');
+          setNewStudyIntensity('commute_school');
           setShowAddEventForm(false);
         };
 
@@ -823,6 +828,19 @@ export const SchoolTimetable: React.FC = () => {
                                   <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold border ${typeBadge.bg}`}>
                                     {typeBadge.icon} {typeBadge.label}
                                   </span>
+                                  {ev.type === 'exam' && ev.studyIntensity && (
+                                    <span className={`px-1.5 py-0.2 rounded text-[10px] font-semibold border ${
+                                      ev.studyIntensity === 'none' 
+                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
+                                        : ev.studyIntensity === 'commute_school'
+                                        ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                        : 'bg-rose-50 text-rose-800 border-rose-200'
+                                    }`}>
+                                      {ev.studyIntensity === 'none' && '🟢 Není potřeba'}
+                                      {ev.studyIntensity === 'commute_school' && '🚌 V autobuse / ve škole'}
+                                      {ev.studyIntensity === 'home' && '🏠 Doma'}
+                                    </span>
+                                  )}
                                   <span className={`font-bold text-slate-900 text-xs break-words ${ev.isDone ? 'line-through text-slate-500' : ''}`}>
                                     {ev.title}
                                   </span>
@@ -895,6 +913,50 @@ export const SchoolTimetable: React.FC = () => {
                           📖 Úkol
                         </button>
                       </div>
+
+                      {/* Výběr intenzity učení (pouze pro písemku) */}
+                      {newEventType === 'exam' && (
+                        <div className="space-y-1.5 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                          <label className="block text-[11px] font-bold text-slate-700">
+                            Jak moc se na písemku učit?
+                          </label>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setNewStudyIntensity('none')}
+                              className={`py-1.5 px-1.5 rounded-lg text-[10px] font-bold border transition cursor-pointer text-center leading-tight ${
+                                newStudyIntensity === 'none'
+                                  ? 'bg-emerald-50 border-emerald-400 text-emerald-800 shadow-2xs ring-1 ring-emerald-400'
+                                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                              }`}
+                            >
+                              🟢 Není potřeba
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setNewStudyIntensity('commute_school')}
+                              className={`py-1.5 px-1.5 rounded-lg text-[10px] font-bold border transition cursor-pointer text-center leading-tight ${
+                                newStudyIntensity === 'commute_school'
+                                  ? 'bg-amber-50 border-amber-400 text-amber-800 shadow-2xs ring-1 ring-amber-400'
+                                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                              }`}
+                            >
+                              🚌 V buse / ve škole
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setNewStudyIntensity('home')}
+                              className={`py-1.5 px-1.5 rounded-lg text-[10px] font-bold border transition cursor-pointer text-center leading-tight ${
+                                newStudyIntensity === 'home'
+                                  ? 'bg-rose-50 border-rose-400 text-rose-800 shadow-2xs ring-1 ring-rose-400'
+                                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                              }`}
+                            >
+                              🏠 Doma
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Název / Látka */}
                       <div>

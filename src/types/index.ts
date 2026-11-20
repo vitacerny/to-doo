@@ -121,6 +121,8 @@ export interface CalendarEvent {
 
 export type SchoolEventItemType = 'exam' | 'oral_exam' | 'homework'; // písemka | zkoušení | domácí úkol
 
+export type StudyIntensity = 'none' | 'commute_school' | 'home'; // není potřeba | v autobuse/ve škole | doma
+
 export interface SchoolLessonEvent {
   id: string;
   userId: string;
@@ -128,6 +130,7 @@ export interface SchoolLessonEvent {
   period: number; // 0 - 9
   subject: string; // MA, CJ, AJ...
   type: SchoolEventItemType; // 'exam' | 'oral_exam' | 'homework'
+  studyIntensity?: StudyIntensity; // jak moc se učit (pro písemku)
   title: string; // Popis / látka / téma
   note?: string; // Doplňující poznámka
   isDone?: boolean; // Splněno / naučeno / odevzdáno
