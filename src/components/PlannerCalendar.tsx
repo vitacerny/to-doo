@@ -169,6 +169,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   // Modals
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
+  const [viewingEvent, setViewingEvent] = useState<CalendarEvent | null>(null);
 
   // Form State
   const [title, setTitle] = useState('');
@@ -250,8 +251,15 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     setIsModalOpen(true);
   };
 
+  // Otevře zobrazení detailu (pouze info + akční tlačítka)
+  const handleOpenDetailModal = (ev: CalendarEvent, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setViewingEvent(ev);
+  };
+
   const handleOpenEditModal = (ev: CalendarEvent, e?: React.MouseEvent) => {
     e?.stopPropagation();
+    setViewingEvent(null);
     setEditingEvent(ev);
     setTitle(ev.title);
     setDescription(ev.description || '');
@@ -926,7 +934,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                       return (
                         <div
                           key={ev.id}
-                          onClick={(e) => handleOpenEditModal(ev, e)}
+                          onClick={(e) => handleOpenDetailModal(ev, e)}
                           className={`truncate text-[10px] sm:text-xs font-medium px-1.5 py-0.5 rounded border transition flex items-center justify-between gap-1 group/item ${
                             ev.isDone 
                               ? 'bg-slate-100 border-slate-200 text-slate-400 line-through' 
@@ -1037,7 +1045,7 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                     return (
                       <div
                         key={ev.id}
-                        onClick={(e) => handleOpenEditModal(ev, e)}
+                        onClick={(e) => handleOpenDetailModal(ev, e)}
                         className={`p-2 rounded-xl border text-xs space-y-1 transition ${
                           ev.isDone 
                             ? 'bg-slate-100 border-slate-200 text-slate-400 line-through' 
@@ -1174,7 +1182,8 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
               return (
                 <div
                   key={ev.id}
-                  className={`flex items-start justify-between p-4 rounded-xl border transition ${
+                  onClick={(e) => handleOpenDetailModal(ev, e)}
+                  className={`flex items-start justify-between p-4 rounded-xl border transition cursor-pointer ${
                     ev.isDone 
                       ? 'bg-slate-50 border-slate-200 text-slate-400' 
                       : `${colorCfg.lightBg} ${colorCfg.border} text-slate-800`
@@ -1365,6 +1374,188 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
           </div>
         </div>
       )}
+
+      {/* DETAIL MODAL (Pouze zobrazení informací o hodině + tlačítka pro změnu stavu a úpravu) */}
+      {viewingEvent && (() => {
+        const ev = viewingEvent;
+        const tut = ev.tutoring;
+        const colorCfg = COLOR_CLASSES[ev.color] || COLOR_CLASSES.rose;
+        const currentSt = tut?.status || 'unprepared';
+        const allowedNext = tut ? getNextAllowedTutoringStatuses(currentSt, tut.type) : [];
+
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col">
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/60">
+                <div className="flex items-center gap-2.5">
+                  <div className={`p-2 rounded-xl ${colorCfg.lightBg} ${colorCfg.text}`}>
+                    {tut ? <GraduationCap className="w-5 h-5" /> : <CalendarIcon className="w-5 h-5" />}
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">
+                      {ev.title}
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      {format(new Date(ev.date + 'T12:00:00'), 'EEEE, d. MMMM yyyy', { locale: cs })}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setViewingEvent(null)}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+                {/* Čas a termín */}
+                <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100 text-xs text-slate-700">
+                  <Clock className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <span className="font-semibold">
+                    {ev.startTime ? `${ev.startTime} – ${ev.endTime || 'neuveden'}` : 'Celodenní událost'}
+                  </span>
+                </div>
+
+                {/* Detaily doučování */}
+                {tut && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 space-y-0.5">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">Student</span>
+                        <div className="font-bold text-slate-800">{tut.studentColor}</div>
+                      </div>
+
+                      <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 space-y-0.5">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">Předmět</span>
+                        <div className="font-bold text-slate-800">{tut.subject}</div>
+                      </div>
+
+                      <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 space-y-0.5">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">Typ a místo</span>
+                        <div className="font-semibold text-slate-800">
+                          {tut.type === 'private' ? 'Soukromé' : 'Firma'} • {tut.place === 'library' ? 'Knihovna' : 'Kancl'}
+                        </div>
+                      </div>
+
+                      <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 space-y-0.5">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">Zaměření</span>
+                        <div className="font-semibold text-slate-800">
+                          {tut.goal === 'exam' ? '🎯 Přijímačkové' : '📚 Průběžné'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Stav hodiny a změna stavu tlačítkem */}
+                    <div className="p-3.5 rounded-2xl border border-indigo-100 bg-indigo-50/30 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                          Stav hodiny
+                        </span>
+                        <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full border ${TUTORING_STATUS_CONFIG[currentSt]?.badgeClass || ''}`}>
+                          {TUTORING_STATUS_CONFIG[currentSt]?.label}
+                        </span>
+                      </div>
+
+                      {/* Tlačítka pro změnu stavu o 1 krok */}
+                      {allowedNext.length > 0 && (
+                        <div className="pt-1 flex flex-wrap gap-2">
+                          {allowedNext.map(st => (
+                            <button
+                              key={st}
+                              type="button"
+                              onClick={async (e) => {
+                                await handleQuickStatusChange(ev, st, e);
+                                // Aktualizujeme stav v otevřeném okně
+                                setViewingEvent(prev => prev ? {
+                                  ...prev,
+                                  tutoring: prev.tutoring ? {
+                                    ...prev.tutoring,
+                                    status: st
+                                  } : undefined
+                                } : null);
+                              }}
+                              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer flex items-center gap-1.5"
+                            >
+                              <span>➡️ Změnit na: {TUTORING_STATUS_CONFIG[st]?.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {allowedNext.length === 0 && (
+                        <p className="text-[11px] text-slate-400 italic">
+                          Tato hodina je ve finálním stavu, nelze ji dále posunout.
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Příprava na hodinu */}
+                    {tut.preparedNote && (
+                      <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 space-y-1">
+                        <span className="font-bold text-emerald-800 block">✅ Co mám připraveno:</span>
+                        <p className="whitespace-pre-wrap">{tut.preparedNote}</p>
+                      </div>
+                    )}
+
+                    {tut.status === 'unprepared' && tut.targetPreparationNote && (
+                      <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs text-slate-700 space-y-1">
+                        <span className="font-bold text-slate-600 block">📝 Co si chci připravit:</span>
+                        <p className="whitespace-pre-wrap">{tut.targetPreparationNote}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Poznámka / popis */}
+                {ev.description && (
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 text-xs space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Poznámka</span>
+                    <p className="text-slate-700 whitespace-pre-wrap">{ev.description}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer s tlačítkem Upravit */}
+              <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100 bg-slate-50/50">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = ev.id;
+                    setViewingEvent(null);
+                    handleDeleteEvent(id);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-2 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Smazat
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setViewingEvent(null)}
+                    className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-xl text-xs font-semibold transition cursor-pointer"
+                  >
+                    Zavřít
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEditModal(ev)}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-md transition cursor-pointer"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                    Upravit hodinu
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* COMPREHENSIVE MODAL FOR TUTORING & EVENTS */}
       {isModalOpen && (
@@ -1574,54 +1765,63 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
                   {editingEvent && (() => {
                     const originalStatus = editingEvent.tutoring?.status || 'unprepared';
                     const allowedNext = getNextAllowedTutoringStatuses(originalStatus, tutoringType);
-                    const selectableStatuses: TutoringStatus[] = [originalStatus, ...allowedNext];
 
                     return (
-                      <div className="p-3 bg-white rounded-2xl border border-indigo-200/80 space-y-3">
+                      <div className="p-3.5 bg-white rounded-2xl border border-indigo-200/80 space-y-3">
                         <div>
-                          <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center justify-between mb-1.5">
                             <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-                              Aktuální stav hodiny *
+                              Aktuální stav hodiny
                             </label>
                             <span className="text-[10px] text-slate-400">
-                              (Lze přejít pouze o 1 krok dopředu)
+                              (Posun o 1 krok pomocí tlačítka)
                             </span>
                           </div>
-                          
-                          {selectableStatuses.length <= 1 ? (
-                            <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 flex items-center justify-between">
-                              <span>{TUTORING_STATUS_CONFIG[originalStatus]?.label}</span>
-                              <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                                Finální stav
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`px-2.5 py-1 rounded-lg text-xs font-bold border ${TUTORING_STATUS_CONFIG[tutoringStatus]?.badgeClass || ''}`}>
+                              {TUTORING_STATUS_CONFIG[tutoringStatus]?.label}
+                            </span>
+
+                            {/* Tlačítka pro posun do dalšího povoleného stavu */}
+                            {allowedNext.map(st => (
+                              <button
+                                key={st}
+                                type="button"
+                                onClick={() => {
+                                  if (st === 'prepared' && (!preparedNote.trim() || preparedNote.trim().length < 3)) {
+                                    alert('Nejprve vyplňte, co máte připraveno na hodinu (min. 3 znaky) v poli níže.');
+                                    return;
+                                  }
+                                  setTutoringStatus(st);
+                                }}
+                                className={`px-3 py-1 text-xs font-bold rounded-lg transition cursor-pointer shadow-xs border ${
+                                  tutoringStatus === st 
+                                    ? 'bg-indigo-600 text-white border-indigo-600 ring-2 ring-indigo-400' 
+                                    : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                                }`}
+                              >
+                                ➡️ Posunout na: {TUTORING_STATUS_CONFIG[st]?.label}
+                              </button>
+                            ))}
+
+                            {allowedNext.length === 0 && tutoringStatus === originalStatus && (
+                              <span className="text-[11px] font-semibold text-slate-400 italic">
+                                (Finální stav – nelze dále posunout)
                               </span>
-                            </div>
-                          ) : (
-                            <select
-                              value={tutoringStatus}
-                              onChange={(e) => {
-                                const newSt = e.target.value as TutoringStatus;
-                                setTutoringStatus(newSt);
-                              }}
-                              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                            >
-                              {selectableStatuses.map(st => (
-                                <option key={st} value={st}>
-                                  {st === originalStatus ? `${TUTORING_STATUS_CONFIG[st]?.label} (stávající)` : `➡️ Posunout na: ${TUTORING_STATUS_CONFIG[st]?.label}`}
-                                </option>
-                              ))}
-                            </select>
-                          )}
+                            )}
+                          </div>
                         </div>
 
                         {/* Pole pro "Připraveno" (povinné, min 3 znaky) */}
-                        {tutoringStatus === 'prepared' && (
+                        {(tutoringStatus === 'prepared' || allowedNext.includes('prepared')) && (
                           <div className="space-y-1 animate-in fade-in duration-150">
                             <label className="block text-[11px] font-bold text-emerald-800 uppercase tracking-wider">
                               Co mám připraveno na hodinu * (min. 3 znaky)
                             </label>
                             <textarea
                               rows={2}
-                              required
+                              required={tutoringStatus === 'prepared'}
                               placeholder="Např. Pracovní list na lomené výrazy str. 12-14, test z minula..."
                               value={preparedNote}
                               onChange={(e) => setPreparedNote(e.target.value)}
