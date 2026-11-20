@@ -2,6 +2,7 @@ import {
   collection, 
   doc, 
   addDoc, 
+  setDoc,
   updateDoc, 
   deleteDoc, 
   onSnapshot, 
@@ -513,7 +514,7 @@ export const createCalendarEvent = async (event: Omit<CalendarEvent, 'id' | 'cre
     if (event.tutoring) payload.tutoring = event.tutoring;
     if (event.recurringSeriesId) payload.recurringSeriesId = event.recurringSeriesId;
 
-    await addDoc(collection(db, 'calendar_events'), payload);
+    await setDoc(doc(db, 'calendar_events', eventId), payload);
   } catch (err) {
     console.warn("Firestore sync not available, stored locally:", err);
   }
@@ -549,7 +550,7 @@ export const updateCalendarEvent = async (eventId: string, data: Partial<Calenda
     if (data.tutoring) {
       payload.tutoring = data.tutoring;
     }
-    await updateDoc(docRef, payload);
+    await setDoc(docRef, payload, { merge: true });
   } catch (err) {
     console.warn("Firestore update skipped, stored locally:", err);
   }

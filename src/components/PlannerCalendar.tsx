@@ -710,9 +710,14 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
     // Maximální možný konec podle typu doučování:
     // soukromé: 18:00 (knihovna zavírá), firemní: 19:00
     const defaultHardEndMinute = tutType === 'private' ? 18 * 60 : 19 * 60;
+    const todayStr = format(now, 'yyyy-MM-dd');
 
     for (const d of allDays) {
       const dStr = format(d, 'yyyy-MM-dd');
+
+      // Pravidlo: Dny z minulosti (dny, co už byly) nenabízet k nahrazování
+      if (dStr < todayStr) continue;
+
       const dayOfWeek = getDay(d); // 0 = Ne, 1 = Po, ..., 6 = So
 
       // Pravidlo: V neděli se nedoučuje
