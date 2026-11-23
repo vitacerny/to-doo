@@ -8,7 +8,8 @@ import {
   rebalanceTutoringSeries,
   getLocalPendingCompensations,
   addPendingCompensation,
-  removePendingCompensation
+  removePendingCompensation,
+  ensureMondayLessonsForBlueStudent
 } from '../services/firestoreService';
 import { 
   format, 
@@ -228,10 +229,11 @@ export const PlannerCalendar: React.FC<PlannerProps> = ({ events, projectTasks, 
   const [customUntilDate, setCustomUntilDate] = useState('2027-04-12');
   const [customWeeks, setCustomWeeks] = useState(8);
 
-  // Při prvním načtení synchronizujeme pending kompenzace
+  // Při prvním načtení synchronizujeme pending kompenzace a zajistíme pondělní doučování modrého studenta
   useEffect(() => {
     if (currentUser) {
       setPendingCompensations(getLocalPendingCompensations(currentUser.uid));
+      ensureMondayLessonsForBlueStudent(currentUser.uid);
 
       const handleCompChange = () => {
         setPendingCompensations(getLocalPendingCompensations(currentUser.uid));

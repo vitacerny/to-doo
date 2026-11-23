@@ -194,15 +194,9 @@ export const SchoolTimetable: React.FC = () => {
   const { currentUser } = useAuth();
   const userId = currentUser?.uid || 'guest';
 
-  // Výchozí týden: Příští týden od 23. 11. 2026 (dle požadavku uživatele)
+  // Výchozí týden: Aktuální týden
   const [selectedDate, setSelectedDate] = useState<Date>(() => {
-    const today = new Date();
-    // Posun na příští pondělí
-    const day = today.getDay();
-    const daysUntilNextMon = (day === 0 ? 1 : 8 - day);
-    const nextMon = new Date(today);
-    nextMon.setDate(today.getDate() + daysUntilNextMon);
-    return nextMon;
+    return new Date();
   });
 
   const [activeLessonModal, setActiveLessonModal] = useState<{

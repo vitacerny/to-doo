@@ -699,6 +699,102 @@ export const ensureWednesdayLessonForRedStudent = async (_userId: string) => {
 };
 
 /**
+ * Zajistí pondělní doučování studenta modrá (18:00 - 19:00, 60 minut, průběžné, kancl) pro každé pondělí
+ * a upraví i existující minulé/budoucí pondělní lekce z 18:30 (nebo 30min) na 18:00 - 19:00.
+ */
+export const ensureMondayLessonsForBlueStudent = async (userId: string) => {
+  const allEvents = getLocalCalendarEvents(userId);
+  let updated = false;
+
+  // 1. Zkontrolujeme existující pondělní doučování studenta modrá a upravíme na 18:00 - 19:00 (v kanclu, protože končí v 19:00)
+  for (let i = 0; i < allEvents.length; i++) {
+    const ev = allEvents[i];
+    const isBlue = ev.tutoring?.studentColor?.toLowerCase().includes('modr') || ev.title.toLowerCase().includes('modr');
+    if (ev.category === 'tutoring' && isBlue) {
+      const d = new Date(ev.date + 'T12:00:00');
+      if (d.getDay() === 1) { // Pondělí
+        if (ev.startTime !== '18:00' || ev.endTime !== '19:00' || ev.tutoring?.place !== 'office') {
+          allEvents[i] = {
+            ...ev,
+            startTime: '18:00',
+            endTime: '19:00',
+            tutoring: {
+              ...ev.tutoring!,
+              place: 'office',
+              goal: 'continuous'
+            }
+          };
+          updated = true;
+        }
+      }
+    }
+  }
+
+  // 2. Zkontrolujeme, zda existuje série pro modrého studenta na pondělky až do konce školního roku
+  const blueMondayEvents = allEvents.filter(ev => {
+    const isBlue = ev.tutoring?.studentColor?.toLowerCase().includes('modr') || ev.title.toLowerCase().includes('modr');
+    if (ev.category !== 'tutoring' || !isBlue) return false;
+    const d = new Date(ev.date + 'T12:00:00');
+    return d.getDay() === 1;
+  });
+
+  if (blueMondayEvents.length === 0) {
+    // Vytvoříme pondělní doučování pro studenta modrá od aktuálního týdne do konce školního roku (30. 6.)
+    const now = new Date();
+    const curYear = now.getFullYear();
+    const endYear = (now.getMonth() + 1) >= 9 ? curYear + 1 : curYear;
+    const schoolYearEnd = new Date(endYear, 5, 30, 23, 59, 59);
+
+    // Najdeme nejbližší pondělí (pondělí v aktuálním týdnu)
+    const currentMon = new Date(now);
+    const day = currentMon.getDay();
+    const diff = (day === 0 ? -6 : 1 - day);
+    currentMon.setDate(currentMon.getDate() + diff);
+    currentMon.setHours(0, 0, 0, 0);
+
+    const seriesId = 'series_blue_monday_' + Date.now();
+    let iter = new Date(currentMon);
+    let seqIdx = 0;
+
+    while (iter <= schoolYearEnd) {
+      const dateStr = iter.toISOString().split('T')[0];
+      const newEv: CalendarEvent = {
+        id: 'cal_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+        userId,
+        title: 'Doučování M (modrá)',
+        date: dateStr,
+        startTime: '18:00',
+        endTime: '19:00',
+        color: 'blue',
+        category: 'tutoring',
+        tutoring: {
+          studentColor: 'modrá',
+          type: 'company',
+          place: 'office',
+          goal: 'continuous',
+          subject: 'M',
+          sequencePattern: ['M'],
+          sequenceIndex: seqIdx,
+          status: 'unprepared'
+        },
+        recurringSeriesId: seriesId,
+        isDone: false,
+        createdAt: new Date().toISOString()
+      };
+      allEvents.push(newEv);
+      seqIdx++;
+      updated = true;
+      iter.setDate(iter.getDate() + 7);
+    }
+  }
+
+  if (updated) {
+    saveLocalCalendarEvents(userId, allEvents);
+    notifyCalendarChange(userId);
+  }
+};
+
+/**
  * Označí existující doučování studenta (např. modrá) jako průběžná (goal = 'continuous').
  */
 export const markTutoringAsContinuousForStudent = (userId: string, studentColorName: string) => {
