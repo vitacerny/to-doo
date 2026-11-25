@@ -37,9 +37,10 @@ import {
   deleteSchoolEvent 
 } from '../services/firestoreService';
 import { 
-  fetchLiveSuplovani, 
-  DailySubstitutionResult, 
-  SchoolSubstitutionChange 
+  fetchMultiDaySuplovani, 
+  MultiDaySubstitutionResult,
+  SchoolSubstitutionChange,
+  normalizeCzDate
 } from '../services/suplovaniService';
 
 export interface LessonPeriod {
@@ -225,15 +226,15 @@ export const SchoolTimetable: React.FC = () => {
     return () => unsubscribe();
   }, [userId]);
 
-  // Stav pro online suplování z ghb.bakalari.cz
-  const [substitutionData, setSubstitutionData] = useState<DailySubstitutionResult | null>(null);
+  // Stav pro online suplování z ghb.bakalari.cz (více dnů dopředu)
+  const [substitutionData, setSubstitutionData] = useState<MultiDaySubstitutionResult | null>(null);
   const [isLoadingSuplovani, setIsLoadingSuplovani] = useState<boolean>(false);
   const [showAllClassChanges, setShowAllClassChanges] = useState<boolean>(false);
 
   const loadSuplovani = async (silent = false) => {
     if (!silent) setIsLoadingSuplovani(true);
     try {
-      const data = await fetchLiveSuplovani();
+      const data = await fetchMultiDaySuplovani();
       setSubstitutionData(data);
     } catch (e) {
       console.error('Chyba při načítání suplování:', e);
@@ -274,8 +275,18 @@ export const SchoolTimetable: React.FC = () => {
 
   const weekStart = startOfWeek(selectedDate, { weekStartsOn: 1 });
   const weekEnd = endOfWeek(selectedDate, { weekStartsOn: 1 });
+  const currentWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+  const weekDiff = Math.round((weekStart.getTime() - currentWeekStart.getTime()) / (7 * 86400000));
   const isoWeek = getISOWeekNumber(weekStart);
   const isEvenWeek = isoWeek % 2 === 0; // Sudý (S) vs Lichý (L)
+
+  const getWeekButtonLabel = (diff: number): string => {
+    if (diff === 0) return 'Tento týden';
+    if (diff === 1) return 'Příští týden';
+    if (diff === -1) return 'Minulý týden';
+    if (diff > 1) return diff < 5 ? `Za ${diff} týdny` : `Za ${diff} týdnů`;
+    return `Před ${Math.abs(diff)} týdny`;
+  };
 
   const handlePrevWeek = () => {
     setSelectedDate(prev => subWeeks(prev, 1));
@@ -286,12 +297,7 @@ export const SchoolTimetable: React.FC = () => {
   };
 
   const handleCurrentWeek = () => {
-    const today = new Date();
-    const day = today.getDay();
-    const daysUntilNextMon = (day === 0 ? 1 : 8 - day);
-    const nextMon = new Date(today);
-    nextMon.setDate(today.getDate() + daysUntilNextMon);
-    setSelectedDate(nextMon);
+    setSelectedDate(new Date());
   };
 
   const DAYS = [
@@ -337,9 +343,14 @@ export const SchoolTimetable: React.FC = () => {
             </button>
             <button
               onClick={handleCurrentWeek}
-              className="px-3 py-1 text-xs font-bold text-slate-700 hover:bg-white rounded-lg transition cursor-pointer"
+              title={weekDiff === 0 ? 'Aktuální týden' : 'Kliknutím se vrátíte na tento týden'}
+              className={`px-3 py-1 text-xs font-bold rounded-lg transition cursor-pointer ${
+                weekDiff === 0
+                  ? 'bg-white text-indigo-700 shadow-2xs'
+                  : 'text-slate-700 hover:bg-white'
+              }`}
             >
-              Příští týden (výchozí)
+              {getWeekButtonLabel(weekDiff)}
             </button>
             <button
               onClick={handleNextWeek}
@@ -390,7 +401,14 @@ export const SchoolTimetable: React.FC = () => {
                 )}
               </div>
               <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
-                <span>Platnost pro: <strong>{substitutionData?.date || 'Načítání...'}</strong></span>
+                <span>
+                  Platnost pro:{' '}
+                  <strong>
+                    {substitutionData?.days?.length
+                      ? substitutionData.days.map(d => d.date).filter(Boolean).join(', ')
+                      : 'Načítání...'}
+                  </strong>
+                </span>
               </div>
             </div>
           </div>
@@ -413,27 +431,29 @@ export const SchoolTimetable: React.FC = () => {
           </div>
         </div>
 
-        {/* Přehled změn pro studenta na dnešek / načtený den */}
-        {substitutionData && (
-          <div className="pt-2 border-t border-slate-100">
-            {(() => {
+        {/* Přehled změn pro studenta na všechny načtené dny */}
+        {substitutionData && substitutionData.days.length > 0 && (
+          <div className="pt-2 border-t border-slate-100 space-y-2.5">
+            {substitutionData.days.map((daySub) => {
               const displayChanges = showAllClassChanges 
-                ? substitutionData.classChanges 
-                : substitutionData.userChanges;
+                ? daySub.classChanges 
+                : daySub.userChanges;
 
               if (displayChanges.length === 0) {
                 return (
-                  <div className="flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50/70 border border-emerald-200 rounded-xl px-3 py-2">
-                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-                    <span>Žádné změny ani odpadlé hodiny pro vás v tento den nejsou hlášeny (výuka probíhá beze změn).</span>
+                  <div key={daySub.date} className="flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50/70 border border-emerald-200 rounded-xl px-3 py-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
+                    <span>
+                      <strong>{daySub.date}:</strong> Žádné změny ani odpadlé hodiny nejsou hlášeny.
+                    </span>
                   </div>
                 );
               }
 
               return (
-                <div className="space-y-1.5">
+                <div key={daySub.date} className="space-y-1.5">
                   <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                    {showAllClassChanges ? 'Všechny hlášené změny třídy 8.A:' : 'Změny týkající se přímo vás:'}
+                    {daySub.date} — {showAllClassChanges ? 'Všechny hlášené změny třídy 8.A:' : 'Změny týkající se přímo vás:'}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {displayChanges.map((ch, idx) => {
@@ -467,7 +487,7 @@ export const SchoolTimetable: React.FC = () => {
                   </div>
                 </div>
               );
-            })()}
+            })}
           </div>
         )}
       </div>
@@ -554,17 +574,17 @@ export const SchoolTimetable: React.FC = () => {
                       }
 
                       // Zkontrolujeme, zda pro tuto lekci existuje záznam v suplování
-                      // Pozn.: Změny v suplování jsou pro konkrétní den (např. 20.11.2026)
-                      const formattedDayDate = format(day.date, 'd.M.yyyy').replace(/\s+/g, '');
-                      const subDateClean = (substitutionData?.date || '').replace(/\s+/g, '');
-                      const isSubDateMatchingDay = subDateClean.includes(formattedDayDate);
+                      const formattedDayDate = normalizeCzDate(format(day.date, 'd.M.yyyy'));
+                      const matchingDaySub = substitutionData?.days.find(
+                        d => normalizeCzDate(d.date) === formattedDayDate
+                      );
 
                       // Hledáme suplování pro danou hodinu a předmět, které se týká studenta
-                      const matchedChange = isSubDateMatchingDay ? substitutionData?.userChanges.find(ch => {
+                      const matchedChange = matchingDaySub?.userChanges.find(ch => {
                         if (ch.period !== period.period) return false;
                         if (ch.subject.toUpperCase() !== activeLesson.subject.toUpperCase()) return false;
                         return true;
-                      }) : undefined;
+                      });
 
                       const isCancelled = matchedChange && (
                         matchedChange.changeType.toLowerCase().includes('odpadá') || 
@@ -818,7 +838,7 @@ export const SchoolTimetable: React.FC = () => {
                   </div>
                   {isCancelled ? (
                     <p className="text-[11px] font-medium leading-relaxed">
-                      Tato vyučovací hodina podle dnešního suplování na GHB <strong>odpadá</strong> (vyučující {substitution.originalTeacher || lesson.teacher}).
+                      Tato vyučovací hodina podle suplování na GHB <strong>odpadá</strong> (vyučující {substitution.originalTeacher || lesson.teacher}).
                     </p>
                   ) : (
                     <p className="text-[11px] font-medium leading-relaxed">

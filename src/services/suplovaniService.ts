@@ -18,6 +18,12 @@ export interface DailySubstitutionResult {
   error?: string;
 }
 
+export interface MultiDaySubstitutionResult {
+  days: DailySubstitutionResult[];
+  fetchTimestamp: string;
+  source: 'live' | 'mock' | 'cached';
+}
+
 // Skupiny studenta pro 8.A:
 // - AJ: skupina HV (vyučující Fejt) -> skupinu VV (Hart) uživatel NEMÁ!
 // - SMA: 8.A SMAG (Bici)
@@ -190,9 +196,108 @@ export function parseBakalariSuplovaniHtml(html: string): DailySubstitutionResul
 }
 
 /**
- * Pokusí se načíst aktuální suplování z GHB
+ * Normalizuje datum z formátu "05.12.2026" nebo "5. 12. 2026" na "5.12.2026"
  */
-export async function fetchLiveSuplovani(): Promise<DailySubstitutionResult> {
+export function normalizeCzDate(dateStr: string): string {
+  return (dateStr || '').replace(/\s+/g, '').replace(/\b0+(\d)/g, '$1');
+}
+
+/**
+ * Parsuje zakázaná data z kalendáře Bakalářů ('disabledDates':[new Date(2026,10,21,...), ...])
+ */
+function parseDisabledDates(html: string): Set<string> {
+  const disabled = new Set<string>();
+  const disMatch = html.match(/'disabledDates':\[(.*?)\]/);
+  if (!disMatch) return disabled;
+
+  const dateRegex = /new Date\((\d+),(\d+),(\d+)/g;
+  let m;
+  while ((m = dateRegex.exec(disMatch[1])) !== null) {
+    const y = parseInt(m[1], 10);
+    const monthZeroIndexed = parseInt(m[2], 10);
+    const d = parseInt(m[3], 10);
+    disabled.add(`${y}-${monthZeroIndexed}-${d}`);
+  }
+  return disabled;
+}
+
+/**
+ * Vyparsuje DD.MM.YYYY na { day, monthZeroIndexed, year }
+ */
+function parseCzDateParts(dateStr: string): { day: number; monthZeroIndexed: number; year: number } | null {
+  const m = (dateStr || '').trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (!m) return null;
+  return {
+    day: parseInt(m[1], 10),
+    monthZeroIndexed: parseInt(m[2], 10) - 1,
+    year: parseInt(m[3], 10)
+  };
+}
+
+function formatCzDateDdMmYyyy(date: Date): string {
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const y = date.getUTCFullYear();
+  return `${d}.${m}.${y}`;
+}
+
+/**
+ * Načte suplování pro konkrétní budoucí den pomocí ASP.NET postbacku na DateEdit
+ */
+async function fetchBakalariDatePost(
+  baseUrl: string,
+  initHtml: string,
+  targetUtcDate: Date
+): Promise<DailySubstitutionResult | null> {
+  const vs = (initHtml.match(/name="__VIEWSTATE" id="__VIEWSTATE" value="([^"]+)"/) || [])[1];
+  const gen = (initHtml.match(/name="__VIEWSTATEGENERATOR" id="__VIEWSTATEGENERATOR" value="([^"]+)"/) || [])[1] || '';
+  const ev = (initHtml.match(/name="__EVENTVALIDATION" id="__EVENTVALIDATION" value="([^"]+)"/) || [])[1];
+
+  if (!vs || !ev) return null;
+
+  const dateStr = formatCzDateDdMmYyyy(targetUtcDate);
+  const ts = targetUtcDate.getTime().toString();
+  const stateJson = JSON.stringify({ rawValue: ts, useMinDateInsteadOfNull: false });
+
+  const params = new URLSearchParams();
+  params.append('__EVENTTARGET', 'DateEdit');
+  params.append('__EVENTARGUMENT', '');
+  params.append('__VIEWSTATE', vs);
+  params.append('__VIEWSTATEGENERATOR', gen);
+  params.append('__EVENTVALIDATION', ev);
+  params.append('DateEdit', dateStr);
+  params.append('DateEdit_State', stateJson);
+  params.append('DateEdit$State', stateJson);
+  params.append('DateEdit_Raw', ts);
+
+  try {
+    const res = await fetch(baseUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'text/html'
+      },
+      body: params.toString()
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    if (!html || (!html.includes('zmeny-content') && !html.includes('changes-content') && !html.includes('Gymnázium Havlíčkův Brod'))) {
+      return null;
+    }
+    const parsed = parseBakalariSuplovaniHtml(html);
+    if (!parsed.date || normalizeCzDate(parsed.date) !== normalizeCzDate(dateStr)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pokusí se načíst aktuální suplování z GHB (včetně dalších dostupných dnů dopředu)
+ */
+export async function fetchMultiDaySuplovani(): Promise<MultiDaySubstitutionResult> {
   const directBakalariUrl = 'https://ghb.bakalari.cz/next/zmeny.aspx';
   const urlsToTry = [
     '/api-suplovani', // 1. Vite lokální proxy (plně funkční při `npm run dev`)
@@ -201,13 +306,18 @@ export async function fetchLiveSuplovani(): Promise<DailySubstitutionResult> {
     `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(directBakalariUrl)}`
   ];
 
+  let workingUrl: string | null = null;
+  let initHtml: string | null = null;
+
   for (const url of urlsToTry) {
     try {
       const res = await fetch(url, { headers: { 'Accept': 'text/html' } });
       if (res.ok) {
         const text = await res.text();
-        if (text && (text.includes('zmeny-content') || text.includes('zmeny.aspx') || text.includes('Gymnázium Havlíčkův Brod'))) {
-          return parseBakalariSuplovaniHtml(text);
+        if (text && (text.includes('zmeny-content') || text.includes('changes-content') || text.includes('zmeny.aspx') || text.includes('Gymnázium Havlíčkův Brod'))) {
+          workingUrl = url;
+          initHtml = text;
+          break;
         }
       }
     } catch {
@@ -215,6 +325,71 @@ export async function fetchLiveSuplovani(): Promise<DailySubstitutionResult> {
     }
   }
 
+  if (workingUrl && initHtml) {
+    const todayResult = parseBakalariSuplovaniHtml(initHtml);
+    const days: DailySubstitutionResult[] = [todayResult];
+    const seenDates = new Set<string>([normalizeCzDate(todayResult.date)]);
+
+    // Zkusíme načíst další dostupné dny dopředu (až 10 kalendářních dnů, max 5 školních dnů)
+    const baseParts = parseCzDateParts(todayResult.date);
+    const canPostFuture = !workingUrl.includes('corsproxy.io') && !workingUrl.includes('codetabs.com');
+
+    if (baseParts && canPostFuture) {
+      const disabledDates = parseDisabledDates(initHtml);
+      const futureTargets: Date[] = [];
+
+      for (let offset = 1; offset <= 10 && futureTargets.length < 5; offset++) {
+        const candidate = new Date(Date.UTC(baseParts.year, baseParts.monthZeroIndexed, baseParts.day + offset));
+        const dayOfWeek = candidate.getUTCDay();
+        if (dayOfWeek === 0 || dayOfWeek === 6) continue; // Víkend přeskakujeme
+
+        const key = `${candidate.getUTCFullYear()}-${candidate.getUTCMonth()}-${candidate.getUTCDate()}`;
+        if (disabledDates.has(key)) continue;
+
+        futureTargets.push(candidate);
+      }
+
+      if (futureTargets.length > 0) {
+        const futureResults = await Promise.all(
+          futureTargets.map(target => fetchBakalariDatePost(workingUrl!, initHtml!, target))
+        );
+
+        for (const res of futureResults) {
+          if (res && res.date) {
+            const norm = normalizeCzDate(res.date);
+            if (!seenDates.has(norm)) {
+              seenDates.add(norm);
+              days.push(res);
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      days,
+      fetchTimestamp: new Date().toISOString(),
+      source: 'live'
+    };
+  }
+
+  const fallback = await fetchLiveSuplovaniFallback();
+  return {
+    days: [fallback],
+    fetchTimestamp: fallback.fetchTimestamp,
+    source: fallback.source
+  };
+}
+
+/**
+ * Pokusí se načíst aktuální suplování z GHB (zpětná kompatibilita pro jeden den)
+ */
+export async function fetchLiveSuplovani(): Promise<DailySubstitutionResult> {
+  const multi = await fetchMultiDaySuplovani();
+  return multi.days[0];
+}
+
+function fetchLiveSuplovaniFallback(): DailySubstitutionResult {
   // 4. Fallback: Reálná data z dnešního dne (20. 11. 2026), kdy v 8.A reálně odpadá 5. hod MA (Bici) a 6. hod AJ (Fejt i Hart)
   return {
     date: '20.11.2026',
